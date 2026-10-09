@@ -49,3 +49,8 @@ body {
     flex-direction: column;
   }
 }
+
+#currentPasswordField[hidden],
+#passwordError[hidden] {
+  display: none !important;
+}
