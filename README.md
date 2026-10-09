@@ -1,6 +1,6 @@
 # APPImprumutAsociat
 
-Codul aplicației LoanCopilot 2.6.1, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
+Codul aplicației LoanCopilot 2.6.2, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
 
 Instrucțiuni de deploy: [README_DEPLOY.md](01%20Aplicatia/README_DEPLOY.md).
 

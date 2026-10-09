@@ -1,3 +1,7 @@
+## 2.6.2
+
+- Administrare acces: schimbarea parolei proprii și resetarea parolelor de către superadministrator, cu confirmare, audit și revocarea sesiunilor.
+
 # LoanCopilot 2.5.0
 
 - generare de previzualizare paginată direct din DOCX, fără LibreOffice și fără servicii externe;

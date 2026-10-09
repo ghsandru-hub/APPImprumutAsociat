@@ -624,7 +624,14 @@ def create_app() -> Flask:
         data = payload()
         current_password = data.get("current_password") or ""
         new_password = data.get("new_password") or ""
-        validate_password(new_password)
+        if not isinstance(current_password, str) or not isinstance(new_password, str):
+            return json_error("Parolă invalidă.")
+        if "confirm_password" in data and new_password != data["confirm_password"]:
+            return json_error("Confirmarea parolei nu coincide.")
+        try:
+            validate_password(new_password)
+        except ValueError as exc:
+            return json_error(str(exc))
         with auth_connect() as con:
             user = con.execute("SELECT * FROM users WHERE id=?", (g.user["id"],)).fetchone()
             if not verify_password(current_password, user["password_hash"]):
@@ -634,6 +641,7 @@ def create_app() -> Flask:
                 (hash_password(new_password), utcnow(), utcnow(), g.user["id"]),
             )
             con.execute("UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND id<>?", (utcnow(), g.user["id"], g.auth_session["id"]))
+            con.execute("DELETE FROM auth_challenges WHERE user_id=?", (g.user["id"],))
             con.commit()
         security_audit("PASSWORD_CHANGED", user_id=g.user["id"])
         return jsonify(ok=True)
@@ -2042,6 +2050,37 @@ def create_app() -> Flask:
                 (user_id, company_id, role),
             )
             con.commit()
+        return jsonify(ok=True)
+
+    @app.post("/api/admin/users/<int:user_id>/password")
+    @auth_required
+    def api_admin_reset_password(user_id: int):
+        if not g.user["is_superadmin"]:
+            return json_error("Doar superadministratorul poate reseta parola altui utilizator.", 403)
+        if user_id == g.user["id"]:
+            return json_error("Pentru parola proprie folosiți schimbarea cu parola curentă.")
+        data = payload()
+        new_password = data.get("new_password")
+        if not isinstance(new_password, str):
+            return json_error("Parola nouă este obligatorie.")
+        if new_password != data.get("confirm_password"):
+            return json_error("Confirmarea parolei nu coincide.")
+        try:
+            validate_password(new_password)
+        except ValueError as exc:
+            return json_error(str(exc))
+        with auth_connect() as con:
+            if not con.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
+                return json_error("Utilizatorul nu există.", 404)
+            now = utcnow()
+            con.execute(
+                "UPDATE users SET password_hash=?,password_changed_at=?,updated_at=? WHERE id=?",
+                (hash_password(new_password), now, now, user_id),
+            )
+            con.execute("UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", (now, user_id))
+            con.execute("DELETE FROM auth_challenges WHERE user_id=?", (user_id,))
+            con.commit()
+        security_audit("PASSWORD_RESET", user_id=g.user["id"], details=f"target_user_id={user_id}")
         return jsonify(ok=True)
 
     @app.patch("/api/admin/users/<int:user_id>")

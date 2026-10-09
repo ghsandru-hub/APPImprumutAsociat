@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-APP_VERSION = "2.6.1"
+APP_VERSION = "2.6.2"
 DEFAULT_HOME = Path("/home/aiallro")
 HOME = Path(os.getenv("LOANCOPILOT_HOME", DEFAULT_HOME)).expanduser()
 PUBLIC_ROOT = Path(os.getenv("LOANCOPILOT_PUBLIC_ROOT", HOME / "loancopilot.aiall.ro")).expanduser()

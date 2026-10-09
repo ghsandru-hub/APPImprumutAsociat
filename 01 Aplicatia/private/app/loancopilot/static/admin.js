@@ -1,5 +1,6 @@
 'use strict';
 const csrf=document.querySelector('meta[name="csrf-token"]').content;
+const currentUserId=Number(document.body.dataset.userId);
 const isSuperadmin=document.body.dataset.superadmin==='1';
 const ui=Object.freeze({
   companyForm:document.getElementById('companyForm'),
@@ -84,7 +85,7 @@ async function load(){
   </tr>`).join('');
   usersBody.innerHTML=state.users.map(u=>{
     const m=state.memberships.filter(x=>x.user_id===u.id).map(x=>`${esc(x.company_name)} · <b>${esc(x.role)}</b>`).join('<br>')||'—';
-    return `<tr><td><b>${esc(u.display_name)}</b><div class="note">${esc(u.email)}</div></td><td>${u.totp_enabled?'activ':'inactiv'}</td><td>${esc(u.last_login_at||'—')}</td><td>${m}</td><td>${isSuperadmin?`<button class="btn small" onclick="toggleUser(${u.id},${u.active?0:1})">${u.active?'Dezactivează':'Activează'}</button>`:`<span class="pill ${u.active?'ok':''}">${u.active?'ACTIV':'INACTIV'}</span>`}</td></tr>`;
+    return `<tr><td><b>${esc(u.display_name)}</b><div class="note">${esc(u.email)}</div></td><td>${u.totp_enabled?'activ':'inactiv'}</td><td>${esc(u.last_login_at||'—')}</td><td>${m}</td><td>${isSuperadmin?`<button class="btn small" onclick="toggleUser(${u.id},${u.active?0:1})">${u.active?'Dezactivează':'Activează'}</button>`:`<span class="pill ${u.active?'ok':''}">${u.active?'ACTIV':'INACTIV'}</span>`}</td><td>${isSuperadmin||Number(u.id)===currentUserId?`<button class="btn small" type="button" onclick="openPasswordDialog(${u.id})">${Number(u.id)===currentUserId?'Schimbă parola':'Resetează parola'}</button>`:'—'}</td></tr>`;
   }).join('');
 }
 
@@ -160,3 +161,41 @@ async function toggleUser(id,active){
   catch(x){toast(x.message,true)}
 }
 load().catch(x=>toast(x.message,true));
+
+const passwordDialog=document.getElementById('passwordDialog');
+const passwordForm=document.getElementById('passwordForm');
+const passwordUserId=document.getElementById('passwordUserId');
+const currentPassword=document.getElementById('currentPassword');
+const newPassword=document.getElementById('newPassword');
+const confirmPassword=document.getElementById('confirmPassword');
+const passwordError=document.getElementById('passwordError');
+const passwordSave=document.getElementById('passwordSave');
+function openPasswordDialog(id){
+  const user=state.users.find(u=>Number(u.id)===Number(id));
+  if(!user||(!isSuperadmin&&Number(id)!==currentUserId))return;
+  passwordForm.reset();
+  passwordUserId.value=String(id);
+  const own=Number(id)===currentUserId;
+  document.getElementById('passwordTitle').textContent=own?'Schimbă parola':'Resetează parola';
+  document.getElementById('passwordUser').textContent=user.display_name+' · '+user.email;
+  document.getElementById('currentPasswordField').hidden=!own;
+  currentPassword.required=own;
+  document.getElementById('passwordNote').textContent=own?'Sesiunea curentă rămâne deschisă. Celelalte sesiuni vor fi închise.':'Toate sesiunile utilizatorului vor fi închise. Utilizatorul se va autentifica folosind noua parolă.';
+  passwordError.hidden=true;passwordError.textContent='';
+  passwordDialog.showModal();
+  (own?currentPassword:newPassword).focus();
+}
+passwordDialog.addEventListener('close',()=>{passwordForm.reset();passwordError.textContent='';passwordError.hidden=true});
+passwordForm.addEventListener('submit',async e=>{
+  e.preventDefault();
+  passwordError.hidden=true;
+  if(newPassword.value!==confirmPassword.value){passwordError.textContent='Confirmarea parolei nu coincide.';passwordError.hidden=false;confirmPassword.focus();return}
+  const id=Number(passwordUserId.value);
+  const own=id===currentUserId;
+  passwordSave.disabled=true;
+  try{
+    await api(own?'/api/profile/password':'/api/admin/users/'+id+'/password',{method:'POST',body:JSON.stringify({current_password:currentPassword.value,new_password:newPassword.value,confirm_password:confirmPassword.value})});
+    passwordDialog.close();toast(own?'Parola a fost schimbată.':'Parola utilizatorului a fost resetată.');
+  }catch(x){passwordError.textContent=x.message;passwordError.hidden=false}
+  finally{passwordSave.disabled=false}
+});

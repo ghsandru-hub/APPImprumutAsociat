@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='auth.css', v=version) }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='admin.css', v=version) }}">
 </head>
-<body data-superadmin="{{ 1 if user.is_superadmin else 0 }}">
+<body data-superadmin="{{ 1 if user.is_superadmin else 0 }}" data-user-id="{{ user.id }}">
 <main class="layout">
   <header class="topbar">
     <div>
@@ -65,7 +65,7 @@
     <h2>Utilizatori și acces</h2>
     <div class="tablewrap">
       <table class="data">
-        <thead><tr><th>Utilizator</th><th>2FA</th><th>Ultima autentificare</th><th>Acces</th><th>Status</th></tr></thead>
+        <thead><tr><th>Utilizator</th><th>2FA</th><th>Ultima autentificare</th><th>Acces</th><th>Status</th><th>Parolă</th></tr></thead>
         <tbody id="usersBody"></tbody>
       </table>
     </div>
@@ -93,6 +93,28 @@
     <div class="dialogactions">
       <button class="btn" type="button" onclick="companyEditDialog.close()">Renunță</button>
       <button id="editCompanySave" class="btn primary compact" type="submit">Salvează modificările</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="passwordDialog" class="dialog" aria-labelledby="passwordTitle">
+  <form id="passwordForm">
+    <div class="dialoghead">
+      <div><h2 id="passwordTitle">Schimbă parola</h2><div class="note" id="passwordUser"></div></div>
+      <button class="btn" type="button" onclick="passwordDialog.close()" aria-label="Închide">×</button>
+    </div>
+    <div class="dialogbody">
+      <input id="passwordUserId" type="hidden">
+      <div class="field" id="currentPasswordField"><label for="currentPassword">Parola curentă</label><input id="currentPassword" type="password" autocomplete="current-password"></div>
+      <div class="field"><label for="newPassword">Parola nouă</label><input id="newPassword" type="password" minlength="12" autocomplete="new-password" required></div>
+      <div class="field"><label for="confirmPassword">Confirmă parola nouă</label><input id="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></div>
+      <div class="note" id="passwordNote"></div>
+      <div class="note">Minimum 12 caractere, cel puțin o literă și o cifră.</div>
+      <div class="error" id="passwordError" role="alert" hidden></div>
+    </div>
+    <div class="dialogactions">
+      <button class="btn" type="button" onclick="passwordDialog.close()">Renunță</button>
+      <button id="passwordSave" class="btn primary compact" type="submit">Salvează parola</button>
     </div>
   </form>
 </dialog>
