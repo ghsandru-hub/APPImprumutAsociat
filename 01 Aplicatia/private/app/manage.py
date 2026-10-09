@@ -6,12 +6,27 @@ import getpass
 import os
 import shutil
 import sqlite3
-import sys
 from pathlib import Path
 
 from loancopilot import create_app
-from loancopilot.config import AUTH_DB_PATH, DB_ROOT, DOCUMENT_ROOT, PRIVATE_ROOT, TEMPLATE_ROOT, TENANT_DB_ROOT, ensure_directories
-from loancopilot.db import auth_connect, copy_standard_templates_to_company, create_tenant_database, ensure_tenant_schema, init_auth_db, register_company, safe_filename, tenant_db_path
+from loancopilot.config import (
+    AUTH_DB_PATH,
+    DB_ROOT,
+    DOCUMENT_ROOT,
+    TENANT_DB_ROOT,
+    ensure_directories,
+)
+from loancopilot.db import (
+    auth_connect,
+    copy_standard_templates_to_company,
+    create_tenant_database,
+    ensure_tenant_schema,
+    init_auth_db,
+    register_company,
+    safe_filename,
+    sync_tenant_company,
+    tenant_database_status,
+)
 from loancopilot.security import hash_password, validate_password
 
 APP_DIR = Path(__file__).resolve().parent
@@ -64,9 +79,29 @@ def seed_mtm() -> int:
     if not target.exists():
         if not SEED_DB.exists():
             raise FileNotFoundError(f"Seed MTM lipsă: {SEED_DB}")
-        create_tenant_database(target, seed_path=SEED_DB)
+        create_tenant_database(
+            target,
+            seed_path=SEED_DB,
+            company_data={
+                "name": "MTM IZOLAȚII CONSTRUCȚII SRL",
+                "cui": "18235662",
+                "reg_com": "J2005021485405",
+                "address": "București, sector 6, str. Preciziei nr. 13C",
+                "administrator": "Trif Marius-Constantin",
+            },
+        )
     else:
         ensure_tenant_schema(target)
+        sync_tenant_company(
+            target,
+            {
+                "name": "MTM IZOLAȚII CONSTRUCȚII SRL",
+                "cui": "18235662",
+                "reg_com": "J2005021485405",
+                "address": "București, sector 6, str. Preciziei nr. 13C",
+                "administrator": "Trif Marius-Constantin",
+            },
+        )
     docs_target = DOCUMENT_ROOT / slug
     docs_target.mkdir(parents=True, exist_ok=True)
     copy_standard_templates_to_company(docs_target)
@@ -101,26 +136,59 @@ def command_init(args):
 
 def command_create_company(args):
     init_auth_db()
-    slug = safe_filename(args.slug or args.name)
+    slug = safe_filename(args.slug or f"{args.name}-{args.cui}")
     db_filename = f"{slug}.sqlite"
+    company_data = {
+        "name": args.name.strip(),
+        "cui": args.cui.strip(),
+        "reg_com": (args.reg_com or "").strip(),
+        "address": (args.address or "").strip(),
+        "administrator": (args.administrator or "").strip(),
+    }
     target = TENANT_DB_ROOT / db_filename
-    create_tenant_database(target)
-    with sqlite3.connect(target) as con:
-        con.execute(
-            "INSERT INTO company(id,name,cui,reg_com,address,administrator) VALUES(1,?,?,?,?,?)",
-            (args.name, args.cui, args.reg_com, args.address, args.administrator),
-        )
-        con.commit()
     docs_target = DOCUMENT_ROOT / slug
-    docs_target.mkdir(parents=True, exist_ok=True)
-    copied_templates = copy_standard_templates_to_company(docs_target)
-    with auth_connect() as con:
-        company_id = register_company(
-            con, slug=slug, name=args.name, cui=args.cui, reg_com=args.reg_com or "", address=args.address or "",
-            administrator=args.administrator or "", db_filename=db_filename, documents_subdir=slug,
-        )
-        con.commit()
-    print(f"Companie creată: id={company_id}, db={target}, șabloane copiate={copied_templates}")
+    company_id = None
+    db_created = False
+    docs_created = False
+    try:
+        with auth_connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            duplicate = con.execute(
+                "SELECT id,name FROM companies WHERE slug=? OR db_filename=? OR cui=? COLLATE NOCASE",
+                (slug, db_filename, company_data["cui"]),
+            ).fetchone()
+            if duplicate:
+                raise ValueError(f"Compania există deja: {duplicate['name']} (id={duplicate['id']}).")
+            company_id = register_company(
+                con, slug=slug, name=company_data["name"], cui=company_data["cui"],
+                reg_com=company_data["reg_com"], address=company_data["address"],
+                administrator=company_data["administrator"], db_filename=db_filename,
+                documents_subdir=slug,
+            )
+            create_tenant_database(target, company_data=company_data)
+            db_created = True
+            docs_existed = docs_target.exists()
+            docs_target.mkdir(parents=True, exist_ok=True)
+            docs_created = not docs_existed
+            copied_templates = copy_standard_templates_to_company(docs_target)
+            con.commit()
+        status = tenant_database_status({"db_filename": db_filename})
+        if not status["ok"]:
+            raise RuntimeError(f"Baza nu a trecut verificarea: {status}")
+    except Exception:
+        if company_id is not None:
+            with auth_connect() as cleanup_con:
+                cleanup_con.execute("DELETE FROM companies WHERE id=?", (company_id,))
+                cleanup_con.commit()
+        if db_created:
+            target.unlink(missing_ok=True)
+        if docs_created:
+            shutil.rmtree(docs_target, ignore_errors=True)
+        raise
+    print(
+        f"Companie creată: id={company_id}, db={target}, "
+        f"dimensiune={target.stat().st_size}, șabloane copiate={copied_templates}"
+    )
 
 
 def command_create_user(args):

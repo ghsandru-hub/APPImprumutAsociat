@@ -7,8 +7,6 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
-import tempfile
 import zipfile
 from xml.etree import ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
@@ -23,19 +21,15 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from . import business
+from .anaf import AnafLookupError, lookup_company, normalize_cui
 from .docx_print import render_docx_for_print
 from .config import (
     APP_VERSION,
-    AUTH_DB_PATH,
     BACKUP_ROOT,
     BNR_RATE_URLS,
     COOKIE_SECURE,
-    DOCUMENT_ROOT,
     TEMPLATE_ROOT,
     MAX_CONTENT_LENGTH,
-    PRIVATE_ROOT,
-    PDF_CONVERSION_TIMEOUT,
-    LIBREOFFICE_BINARY,
     PREAUTH_COOKIE,
     SESSION_COOKIE,
     SESSION_HOURS,
@@ -48,11 +42,12 @@ from .db import (
     create_tenant_database,
     init_auth_db,
     register_company,
+    repair_tenant_database,
     safe_filename,
     tenant_connect,
+    tenant_database_status,
     tenant_db_path,
     tenant_documents_path,
-    transaction,
     utcnow,
 )
 from .security import (
@@ -100,40 +95,6 @@ def validate_docx_file(path: Path) -> bool:
             return "[Content_Types].xml" in names and "word/document.xml" in names
     except (OSError, zipfile.BadZipFile):
         return False
-
-
-def libreoffice_binary() -> str | None:
-    candidates = [LIBREOFFICE_BINARY, shutil.which("libreoffice"), shutil.which("soffice"), "/usr/bin/libreoffice", "/usr/bin/soffice", "/usr/local/bin/libreoffice", "/usr/local/bin/soffice"]
-    for value in candidates:
-        if value and Path(value).is_file() and os.access(value, os.X_OK):
-            return str(value)
-    return None
-
-
-def convert_docx_to_pdf(source: Path, output_dir: Path) -> Path:
-    binary = libreoffice_binary()
-    if not binary:
-        raise RuntimeError("LibreOffice/soffice nu este instalat sau nu este configurat pe server.")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    temp_root = PRIVATE_ROOT / "tmp"
-    temp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="loancopilot_lo_", dir=temp_root) as profile_dir:
-        profile_uri = Path(profile_dir).resolve().as_uri()
-        command = [
-            binary,
-            f"-env:UserInstallation={profile_uri}",
-            "--headless", "--nologo", "--nodefault", "--nolockcheck", "--nofirststartwizard",
-            "--convert-to", "pdf:writer_pdf_Export", "--outdir", str(output_dir), str(source),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=PDF_CONVERSION_TIMEOUT, check=False)
-    pdf_path = output_dir / f"{source.stem}.pdf"
-    if result.returncode != 0 or not pdf_path.is_file():
-        details = (result.stderr or result.stdout or "Conversia nu a produs fișier PDF.").strip()
-        raise RuntimeError(f"Conversia Word-PDF a eșuat: {details[:1000]}")
-    if pdf_path.stat().st_size <= 5 or pdf_path.read_bytes()[:5] != b"%PDF-":
-        pdf_path.unlink(missing_ok=True)
-        raise RuntimeError("Fișierul rezultat nu este un PDF valid.")
-    return pdf_path
 
 
 def utc_dt() -> datetime:
@@ -372,6 +333,99 @@ def create_app() -> Flask:
     def payload() -> dict:
         return request.get_json(silent=True) or {}
 
+    def normalize_company_updates(data: dict, *, allow_active: bool) -> dict:
+        values = {
+            "name": str(data.get("name") or "").strip(),
+            "cui": str(data.get("cui") or "").strip(),
+            "reg_com": str(data.get("reg_com") or "").strip(),
+            "address": str(data.get("address") or "").strip(),
+            "administrator": str(data.get("administrator") or "").strip(),
+        }
+        if not values["name"]:
+            raise ValueError("Denumirea companiei este obligatorie.")
+        if not values["cui"]:
+            raise ValueError("CUI-ul companiei este obligatoriu.")
+        limits = {"name": 250, "cui": 40, "reg_com": 80, "address": 1000, "administrator": 250}
+        for field, limit in limits.items():
+            if len(values[field]) > limit:
+                raise ValueError(f"Câmpul {field} depășește limita de {limit} caractere.")
+        if allow_active and "active" in data:
+            raw_active = data.get("active")
+            if isinstance(raw_active, str):
+                values["active"] = 0 if raw_active.strip().lower() in {"0", "false", "nu", "off", ""} else 1
+            else:
+                values["active"] = 1 if bool(raw_active) else 0
+        return values
+
+    def update_company_records(company_id: int, data: dict, *, allow_active: bool) -> dict:
+        updates = normalize_company_updates(data, allow_active=allow_active)
+        with auth_connect() as auth_con:
+            company_row = auth_con.execute("SELECT * FROM companies WHERE id=?", (company_id,)).fetchone()
+            if not company_row:
+                raise LookupError("Compania nu există.")
+            tenant_path = tenant_db_path(company_row)
+            if not tenant_path.is_file():
+                raise FileNotFoundError(f"Baza SQLite a companiei lipsește: {tenant_path.name}")
+            set_clause = ",".join(f"{field}=?" for field in updates)
+            auth_con.execute(
+                f"UPDATE companies SET {set_clause},updated_at=? WHERE id=?",
+                [*updates.values(), utcnow(), company_id],
+            )
+            with tenant_connect(company_row) as tenant_con:
+                tenant_values = {key: value for key, value in updates.items() if key != "active"}
+                tenant_con.execute(
+                    """INSERT INTO company(id,name,cui,reg_com,address,administrator,updated_at)
+                       VALUES(1,?,?,?,?,?,?)
+                       ON CONFLICT(id) DO UPDATE SET
+                         name=excluded.name,cui=excluded.cui,reg_com=excluded.reg_com,
+                         address=excluded.address,administrator=excluded.administrator,
+                         updated_at=excluded.updated_at""",
+                    (
+                        tenant_values["name"], tenant_values["cui"], tenant_values["reg_com"],
+                        tenant_values["address"], tenant_values["administrator"], utcnow(),
+                    ),
+                )
+                business.audit(
+                    tenant_con,
+                    "UPDATE",
+                    "company",
+                    entity_id=1,
+                    details=json.dumps(updates, ensure_ascii=False),
+                    user_email=g.user["email"],
+                )
+                tenant_con.commit()
+            auth_con.commit()
+            updated = auth_con.execute("SELECT * FROM companies WHERE id=?", (company_id,)).fetchone()
+        security_audit(
+            "COMPANY_UPDATED",
+            user_id=g.user["id"],
+            company_id=company_id,
+            details=json.dumps(updates, ensure_ascii=False),
+        )
+        return dict(updated)
+
+    def company_with_storage(company_row) -> dict:
+        item = dict(company_row)
+        status = tenant_database_status(company_row)
+        docs_path = tenant_documents_path(company_row)
+        templates_path = docs_path / "sabloane"
+        item.update(
+            db_exists=bool(status["exists"]),
+            db_ok=bool(status["ok"]),
+            db_integrity=status["integrity"],
+            db_size_bytes=int(status["size_bytes"]),
+            db_missing_tables=status["missing_tables"],
+            db_error=status["error"],
+            db_path=status["path"],
+            documents_exists=docs_path.is_dir(),
+            documents_path=str(docs_path),
+            company_template_count=(
+                sum(1 for entry in templates_path.iterdir() if entry.is_file())
+                if templates_path.is_dir() else 0
+            ),
+        )
+        return item
+
     @app.get("/health")
     def health():
         return jsonify(ok=True, app="LoanCopilot", version=APP_VERSION)
@@ -515,6 +569,42 @@ def create_app() -> Flask:
             memberships = [dict(row) for row in company_memberships(con, g.user["id"], g.user["is_superadmin"])]
         return jsonify(ok=True, user=g.user, company=g.company, role=g.role, companies=memberships, csrf_token=g.auth_session["csrf_token"])
 
+    @app.post("/api/anaf/company-lookup")
+    @auth_required
+    def api_anaf_company_lookup():
+        if not (g.user["is_superadmin"] or g.role == "ADMIN"):
+            return json_error("Doar administratorii pot prelua datele unei companii din ANAF.", 403)
+        data = payload()
+        try:
+            cui = normalize_cui(data.get("cui"))
+            result = lookup_company(cui, data.get("data"))
+        except ValueError as exc:
+            return json_error(str(exc), 400)
+        except AnafLookupError as exc:
+            app.logger.warning("ANAF lookup failed for CUI %s: %s", data.get("cui"), exc)
+            return json_error(str(exc), 502)
+        except Exception as exc:
+            app.logger.exception("Unexpected ANAF lookup failure")
+            return json_error(f"Interogarea ANAF a eșuat: {type(exc).__name__}: {exc}", 500)
+        item = result.as_dict()
+        security_audit(
+            "ANAF_COMPANY_LOOKUP",
+            user_id=g.user["id"],
+            company_id=g.company["id"] if g.company else None,
+            details=json.dumps(
+                {
+                    "cui": item["cui"],
+                    "queried_date": item["queried_date"],
+                    "name": item["name"],
+                    "registration_status": item["registration_status"],
+                    "vat_registered": item["vat_registered"],
+                    "inactive": item["inactive"],
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return jsonify(ok=True, item=item)
+
     @app.post("/api/auth/company")
     @auth_required
     def api_switch_company():
@@ -616,7 +706,31 @@ def create_app() -> Flask:
     def api_company():
         with tenant() as con:
             row = con.execute("SELECT * FROM company LIMIT 1").fetchone()
-            return jsonify(ok=True, item=dict(row) if row else {"name": g.company["name"], "cui": g.company["cui"]})
+        item = dict(row) if row else {"name": g.company["name"], "cui": g.company["cui"]}
+        storage = tenant_database_status(g.company)
+        item.update(
+            db_filename=g.company["db_filename"],
+            db_path=storage["path"],
+            db_exists=bool(storage["exists"]),
+            db_ok=bool(storage["ok"]),
+            db_integrity=storage["integrity"],
+            db_size_bytes=int(storage["size_bytes"]),
+            db_missing_tables=storage["missing_tables"],
+            db_error=storage["error"],
+            documents_subdir=g.company["documents_subdir"],
+        )
+        return jsonify(ok=True, item=item)
+
+    @app.patch("/api/company")
+    @role_required("ADMIN")
+    def api_update_current_company():
+        try:
+            item = update_company_records(int(g.company["id"]), payload(), allow_active=False)
+        except ValueError as exc:
+            return json_error(str(exc), 400)
+        except LookupError as exc:
+            return json_error(str(exc), 404)
+        return jsonify(ok=True, item=item)
 
     @app.get("/api/associates")
     @company_required
@@ -624,6 +738,48 @@ def create_app() -> Flask:
         with tenant() as con:
             rows = con.execute("SELECT * FROM associates ORDER BY name").fetchall()
             return jsonify(ok=True, items=business.rows_to_dicts(rows))
+
+    @app.post("/api/associates")
+    @role_required("EDITOR")
+    def api_create_associate():
+        data = payload()
+        name = (data.get("name") or "").strip()
+        if not name:
+            return json_error("Numele asociatului / creditorului este obligatoriu.")
+        try:
+            share_pct = float(data.get("share_pct") or 0)
+        except (TypeError, ValueError):
+            return json_error("Cota trebuie să fie numerică.")
+        if share_pct < 0 or share_pct > 100:
+            return json_error("Cota trebuie să fie între 0 și 100%.")
+        values = {
+            "name": name,
+            "share_pct": share_pct,
+            "cnp": (data.get("cnp") or "").strip() or None,
+            "id_doc": (data.get("id_doc") or "").strip() or None,
+            "address": (data.get("address") or "").strip() or None,
+            "email": (data.get("email") or "").strip() or None,
+            "iban": (data.get("iban") or "").strip() or None,
+            "active": 1,
+        }
+        with tenant() as con:
+            cursor = con.execute(
+                """INSERT INTO associates(name,share_pct,cnp,id_doc,address,email,iban,active)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                tuple(values[key] for key in ("name","share_pct","cnp","id_doc","address","email","iban","active")),
+            )
+            item_id = int(cursor.lastrowid)
+            business.audit(
+                con,
+                "CREATE",
+                "associates",
+                entity_id=item_id,
+                details=json.dumps(values, ensure_ascii=False),
+                user_email=g.user["email"],
+            )
+            con.commit()
+            row = con.execute("SELECT * FROM associates WHERE id=?", (item_id,)).fetchone()
+        return jsonify(ok=True, item=dict(row)), 201
 
     @app.patch("/api/associates/<int:item_id>")
     @role_required("EDITOR")
@@ -683,15 +839,129 @@ def create_app() -> Flask:
     @app.patch("/api/loans/<int:item_id>")
     @role_required("EDITOR")
     def api_update_loan(item_id: int):
-        allowed = {"original_contract_date", "contract_date", "interest_start_date", "interest_rate", "maturity_date", "status", "notes", "interest_rate_mode", "interest_rate_source"}
-        data = {key: value for key, value in payload().items() if key in allowed}
+        allowed = {
+            "original_contract_date",
+            "contract_date",
+            "interest_start_date",
+            "interest_rate",
+            "maturity_date",
+            "status",
+            "notes",
+            "interest_rate_mode",
+            "interest_rate_source",
+        }
+        incoming = payload()
+        data = {key: incoming[key] for key in incoming if key in allowed}
         if not data:
             return json_error("Nu există câmpuri de actualizat.")
+
+        date_fields = {"original_contract_date", "contract_date", "interest_start_date", "maturity_date"}
+        for field in date_fields.intersection(data):
+            value = str(data[field] or "").strip()
+            if not value:
+                if field in {"original_contract_date", "contract_date"}:
+                    return json_error(f"Câmpul {field} este obligatoriu.")
+                data[field] = None
+                continue
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                return json_error(f"Data din câmpul {field} nu este validă.")
+            data[field] = value
+
+        if "status" in data:
+            data["status"] = str(data["status"] or "").strip().upper()
+            if data["status"] not in {"ACTIVE", "SUSPENDED", "CLOSED"}:
+                return json_error("Statusul contractului nu este valid.")
+        if "notes" in data:
+            data["notes"] = str(data["notes"] or "").strip() or None
+
         with tenant() as con:
-            con.execute(f"UPDATE loans SET {','.join(f'{key}=?' for key in data)} WHERE id=?", [*data.values(), item_id])
-            business.audit(con, "UPDATE", "loans", entity_id=item_id, details=json.dumps(data, ensure_ascii=False), user_email=g.user["email"])
+            current = con.execute("SELECT * FROM loans WHERE id=?", (item_id,)).fetchone()
+            if not current:
+                return json_error("Contract inexistent.", 404)
+
+            merged = dict(current)
+            merged.update(data)
+            signed_date = date.fromisoformat(merged["original_contract_date"])
+            effective_date = date.fromisoformat(merged["contract_date"])
+            interest_start = date.fromisoformat(merged["interest_start_date"]) if merged.get("interest_start_date") else None
+            maturity_date = date.fromisoformat(merged["maturity_date"]) if merged.get("maturity_date") else None
+
+            if signed_date > effective_date:
+                return json_error("Data semnării nu poate fi ulterioară datei de la care contractul produce efecte.")
+            if interest_start and interest_start < effective_date:
+                return json_error("Data de început a dobânzii nu poate fi anterioară datei efectelor contractului.")
+            if maturity_date and maturity_date < effective_date:
+                return json_error("Scadența nu poate fi anterioară datei efectelor contractului.")
+            if interest_start and maturity_date and interest_start > maturity_date:
+                return json_error("Data de început a dobânzii nu poate fi ulterioară scadenței.")
+
+            recognized = con.execute(
+                """SELECT COUNT(*) AS count,MIN(period_start) AS first_start,MAX(period_end) AS last_end
+                   FROM interest_accruals WHERE loan_id=? AND status='RECOGNIZED'""",
+                (item_id,),
+            ).fetchone()
+            recognized_count = int(recognized["count"] or 0)
+            if recognized_count:
+                first_recognized = date.fromisoformat(recognized["first_start"])
+                last_recognized = date.fromisoformat(recognized["last_end"])
+                if interest_start is None or interest_start > first_recognized:
+                    return json_error(
+                        "Există dobândă recunoscută contabil începând cu "
+                        f"{recognized['first_start']}. Data de început nu poate fi eliminată sau mutată după această perioadă."
+                    )
+                if maturity_date and maturity_date < last_recognized:
+                    return json_error(
+                        "Există dobândă recunoscută contabil până la "
+                        f"{recognized['last_end']}. Scadența nu poate fi mutată înaintea acestei date."
+                    )
+
+            recalculation_fields = {"interest_start_date", "maturity_date", "status"}
+            needs_recalculation = any(merged.get(field) != current[field] for field in recalculation_fields if field in data)
+            deleted_preliminary = 0
+            recalculated_periods = 0
+
+            con.execute(
+                f"UPDATE loans SET {','.join(f'{key}=?' for key in data)} WHERE id=?",
+                [*data.values(), item_id],
+            )
+            if needs_recalculation:
+                deleted_preliminary = int(
+                    con.execute(
+                        "SELECT COUNT(*) FROM interest_accruals WHERE loan_id=? AND status='CALCULATED'",
+                        (item_id,),
+                    ).fetchone()[0]
+                )
+                con.execute(
+                    "DELETE FROM interest_accruals WHERE loan_id=? AND status='CALCULATED'",
+                    (item_id,),
+                )
+                recalculated_periods = business.recalculate_loan(con, item_id)
+
+            business.audit(
+                con,
+                "UPDATE",
+                "loans",
+                entity_id=item_id,
+                details=json.dumps(
+                    {
+                        "changes": data,
+                        "deleted_preliminary": deleted_preliminary,
+                        "recalculated_periods": recalculated_periods,
+                        "recognized_preserved": recognized_count,
+                    },
+                    ensure_ascii=False,
+                ),
+                user_email=g.user["email"],
+            )
             con.commit()
-        return jsonify(ok=True)
+        return jsonify(
+            ok=True,
+            deleted_preliminary=deleted_preliminary,
+            recalculated_periods=recalculated_periods,
+            recognized_preserved=recognized_count,
+        )
 
     @app.get("/api/transactions")
     @company_required
@@ -821,7 +1091,12 @@ def create_app() -> Flask:
     @app.post("/api/bnr-rates/update")
     @role_required("EDITOR")
     def api_update_bnr_rate():
-        item = business.fetch_current_bnr_rate()
+        try:
+            item = business.fetch_current_bnr_rate()
+        except Exception as exc:
+            app.logger.exception("Actualizarea automată BNR a eșuat")
+            message = str(exc).strip() or "Sursa BNR nu a putut fi accesată."
+            return json_error(message[:1800], 502)
         with tenant() as con:
             con.execute(
                 """INSERT INTO bnr_reference_rates(effective_date,rate,rate_name,source_url,source_document,fetched_at,entry_mode,notes)
@@ -1227,57 +1502,27 @@ def create_app() -> Flask:
     @app.post("/api/documents/<int:item_id>/generate-pdf")
     @role_required("EDITOR")
     def generate_document_pdf(item_id: int):
+        """Open the current DOCX in the browser print view.
+
+        LoanCopilot intentionally avoids a server-side Office dependency. The user
+        saves the browser print output as PDF and can then archive or upload the
+        signed version through the existing versioned PDF endpoints.
+        """
         with tenant() as con:
             document = con.execute("SELECT * FROM documents WHERE id=?", (item_id,)).fetchone()
-            if not document or not document["filename"]:
-                return json_error("Documentul Word nu este atașat.", 404)
-            current_word = con.execute("SELECT id FROM document_word_versions WHERE document_id=? AND is_current=1", (item_id,)).fetchone()
+        if not document or not document["filename"]:
+            return json_error("Documentul Word nu este atașat.", 404)
+
         source = resolve_company_document_path(document["filename"])
         if not source.is_file() or source.suffix.lower() != ".docx":
             return json_error("Sursa curentă nu este un document Word DOCX.")
 
-        if not libreoffice_binary():
-            return jsonify(
-                ok=True,
-                mode="browser_print",
-                print_url=url_for("print_document_word", item_id=item_id, auto=1),
-                message="Documentul a fost pregătit pentru Print / Save as PDF în browser.",
-            )
-
-        root = tenant_documents_path(g.company)
-        pdf_dir = (root / "generate" / f"{item_id:06d}").resolve()
-        if root.resolve() not in pdf_dir.parents:
-            return json_error("Calea de stocare este invalidă.")
-        pdf_dir.mkdir(parents=True, exist_ok=True)
-        temp_root = PRIVATE_ROOT / "tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="loancopilot_pdf_", dir=temp_root) as temp_dir_name:
-            temp_dir = Path(temp_dir_name)
-            input_copy = temp_dir / (secure_filename(source.name) or "document.docx")
-            shutil.copy2(source, input_copy)
-            try:
-                converted = convert_docx_to_pdf(input_copy, temp_dir)
-            except (RuntimeError, subprocess.TimeoutExpired) as exc:
-                return json_error(str(exc), 503)
-            digest = hashlib.sha256(converted.read_bytes()).hexdigest()
-            with tenant() as con:
-                duplicate = con.execute("SELECT id,version_no FROM generated_pdf_versions WHERE document_id=? AND sha256=?", (item_id, digest)).fetchone()
-                if duplicate:
-                    return jsonify(ok=True, id=duplicate["id"], version_no=duplicate["version_no"], reused=True)
-                con.execute("BEGIN IMMEDIATE")
-                version_no = int(con.execute("SELECT COALESCE(MAX(version_no),0)+1 FROM generated_pdf_versions WHERE document_id=?", (item_id,)).fetchone()[0])
-                output_name = f"v{version_no:03d}_{secure_filename(source.stem) or 'document'}.pdf"
-                destination = pdf_dir / output_name
-                shutil.copy2(converted, destination)
-                relative_path = destination.relative_to(root).as_posix()
-                cur = con.execute(
-                    """INSERT INTO generated_pdf_versions(document_id,word_version_id,version_no,stored_path,original_filename,mime_type,size_bytes,sha256,generated_by,notes)
-                       VALUES(?,?,?,?,?,'application/pdf',?,?,?,?)""",
-                    (item_id, current_word["id"] if current_word else None, version_no, relative_path, f"{source.stem}.pdf", destination.stat().st_size, digest, g.user["email"], "PDF generat din documentul Word curent."),
-                )
-                business.audit(con, "GENERATE_PDF", "generated_pdf_versions", entity_id=cur.lastrowid, details=f"document={item_id}; version={version_no}; source={document['filename']}; sha256={digest}", user_email=g.user["email"])
-                con.commit()
-        return jsonify(ok=True, id=cur.lastrowid, version_no=version_no, reused=False)
+        return jsonify(
+            ok=True,
+            mode="browser_print",
+            print_url=url_for("print_document_word", item_id=item_id, auto=1),
+            message="Documentul a fost pregătit pentru Print / Save as PDF în browser.",
+        )
 
     @app.post("/api/documents/<int:item_id>/generated-versions")
     @role_required("EDITOR")
@@ -1582,11 +1827,11 @@ def create_app() -> Flask:
             return json_error("Acces interzis.", 403)
         with auth_connect() as con:
             if g.user["is_superadmin"]:
-                companies = [dict(row) for row in con.execute("SELECT * FROM companies ORDER BY name")]
+                companies = [company_with_storage(row) for row in con.execute("SELECT * FROM companies ORDER BY name")]
                 users = [dict(row) for row in con.execute("SELECT id,email,display_name,active,is_superadmin,totp_enabled,last_login_at,created_at FROM users ORDER BY display_name")]
                 memberships = [dict(row) for row in con.execute("SELECT uc.*,u.email,c.name company_name FROM user_companies uc JOIN users u ON u.id=uc.user_id JOIN companies c ON c.id=uc.company_id ORDER BY c.name,u.email")]
             else:
-                companies = [dict(con.execute("SELECT * FROM companies WHERE id=?", (g.company["id"],)).fetchone())]
+                companies = [company_with_storage(con.execute("SELECT * FROM companies WHERE id=?", (g.company["id"],)).fetchone())]
                 users = [dict(row) for row in con.execute(
                     """SELECT u.id,u.email,u.display_name,u.active,u.is_superadmin,u.totp_enabled,u.last_login_at,u.created_at
                        FROM users u JOIN user_companies uc ON uc.user_id=u.id WHERE uc.company_id=? ORDER BY u.display_name""",
@@ -1604,40 +1849,147 @@ def create_app() -> Flask:
     def api_admin_create_company():
         if not g.user["is_superadmin"]:
             return json_error("Doar administratorul sistem poate crea o companie.", 403)
-        data = payload()
-        slug = safe_filename(data.get("slug") or data.get("name") or "company")
-        db_filename = f"{slug}.sqlite"
-        target_db = tenant_db_path({"db_filename": db_filename})
         try:
-            create_tenant_database(target_db)
-            with sqlite3.connect(target_db) as tenant_con:
-                tenant_con.execute(
-                    "INSERT INTO company(id,name,cui,reg_com,address,administrator) VALUES(1,?,?,?,?,?)",
-                    (data["name"], data["cui"], data.get("reg_com"), data.get("address"), data.get("administrator")),
-                )
-                tenant_con.commit()
-            docs = DOCUMENT_ROOT / slug
-            docs.mkdir(parents=True, exist_ok=True)
-            copied_templates = copy_standard_templates_to_company(docs)
+            data = normalize_company_updates(payload(), allow_active=False)
+        except ValueError as exc:
+            return json_error(str(exc), 400)
+        requested_slug = str((request.get_json(silent=True) or {}).get("slug") or "").strip()
+        slug = safe_filename(requested_slug or f"{data['name']}-{data['cui']}")
+        db_filename = f"{slug}.sqlite"
+        company_record = {**data, "slug": slug, "db_filename": db_filename, "documents_subdir": slug}
+        target_db = tenant_db_path(company_record)
+        docs = tenant_documents_path(company_record)
+        company_id = None
+        copied_templates = 0
+        db_created = False
+        docs_created = False
+        try:
             with auth_connect() as con:
+                con.execute("BEGIN IMMEDIATE")
+                duplicate = con.execute(
+                    "SELECT id,name,slug,cui FROM companies WHERE slug=? OR db_filename=? OR cui=? COLLATE NOCASE",
+                    (slug, db_filename, data["cui"]),
+                ).fetchone()
+                if duplicate:
+                    raise ValueError(
+                        f"Există deja compania '{duplicate['name']}' cu slug/CUI incompatibil "
+                        f"({duplicate['slug']} / {duplicate['cui']})."
+                    )
+                if target_db.exists():
+                    raise FileExistsError(
+                        f"Fișierul bazei există deja fără înregistrare în aplicație: {target_db}. "
+                        "Redenumiți slug-ul sau verificați fișierul orfan."
+                    )
                 company_id = register_company(
                     con,
                     slug=slug,
                     name=data["name"],
                     cui=data["cui"],
-                    reg_com=data.get("reg_com", ""),
-                    address=data.get("address", ""),
-                    administrator=data.get("administrator", ""),
+                    reg_com=data["reg_com"],
+                    address=data["address"],
+                    administrator=data["administrator"],
                     db_filename=db_filename,
                     documents_subdir=slug,
                 )
+                create_tenant_database(target_db, company_data=data)
+                db_created = True
+                docs_existed = docs.exists()
+                docs.mkdir(parents=True, exist_ok=True)
+                docs_created = not docs_existed
+                copied_templates = copy_standard_templates_to_company(docs)
+                con.execute(
+                    "INSERT INTO user_companies(user_id,company_id,role) VALUES(?,?,'ADMIN') "
+                    "ON CONFLICT(user_id,company_id) DO UPDATE SET role='ADMIN'",
+                    (g.user["id"], company_id),
+                )
                 con.commit()
-        except Exception:
-            if target_db.exists():
-                target_db.unlink()
-            raise
-        security_audit("COMPANY_CREATED", user_id=g.user["id"], company_id=company_id, details=f"{data['name']}; templates={copied_templates}")
-        return jsonify(ok=True, id=company_id, templates_copied=copied_templates)
+            status = tenant_database_status(company_record)
+            if not status["ok"]:
+                raise RuntimeError(
+                    "Baza a fost creată, dar verificarea finală a eșuat: "
+                    + (status["error"] or status["integrity"] or ", ".join(status["missing_tables"]))
+                )
+        except (ValueError, FileExistsError) as exc:
+            if company_id is not None:
+                with auth_connect() as cleanup_con:
+                    cleanup_con.execute("DELETE FROM companies WHERE id=?", (company_id,))
+                    cleanup_con.commit()
+            if db_created:
+                target_db.unlink(missing_ok=True)
+            if docs_created:
+                shutil.rmtree(docs, ignore_errors=True)
+            return json_error(str(exc), 400)
+        except Exception as exc:
+            if company_id is not None:
+                with auth_connect() as cleanup_con:
+                    cleanup_con.execute("DELETE FROM companies WHERE id=?", (company_id,))
+                    cleanup_con.commit()
+            if db_created:
+                target_db.unlink(missing_ok=True)
+            if docs_created:
+                shutil.rmtree(docs, ignore_errors=True)
+            app.logger.exception("Company provisioning failed")
+            return json_error(
+                f"Crearea companiei a eșuat la baza SQLite: {type(exc).__name__}: {exc}",
+                500,
+            )
+        security_audit(
+            "COMPANY_CREATED",
+            user_id=g.user["id"],
+            company_id=company_id,
+            details=f"{data['name']}; db={target_db}; templates={copied_templates}",
+        )
+        return jsonify(
+            ok=True,
+            id=company_id,
+            slug=slug,
+            db_created=True,
+            db_filename=db_filename,
+            db_path=str(target_db),
+            db_size_bytes=target_db.stat().st_size,
+            templates_copied=copied_templates,
+        )
+
+
+    @app.patch("/api/admin/companies/<int:company_id>")
+    @auth_required
+    def api_admin_update_company(company_id: int):
+        if not admin_access():
+            return json_error("Acces interzis.", 403)
+        if not g.user["is_superadmin"] and (not g.company or company_id != int(g.company["id"])):
+            return json_error("Puteți edita numai compania activă.", 403)
+        try:
+            item = update_company_records(company_id, payload(), allow_active=bool(g.user["is_superadmin"]))
+        except ValueError as exc:
+            return json_error(str(exc), 400)
+        except LookupError as exc:
+            return json_error(str(exc), 404)
+        return jsonify(ok=True, item=item)
+
+    @app.post("/api/admin/companies/<int:company_id>/storage/repair")
+    @auth_required
+    def api_admin_repair_company_storage(company_id: int):
+        if not g.user["is_superadmin"]:
+            return json_error("Doar administratorul sistem poate repara stocarea unei companii.", 403)
+        with auth_connect() as con:
+            company_row = con.execute("SELECT * FROM companies WHERE id=?", (company_id,)).fetchone()
+            if not company_row:
+                return json_error("Compania nu există.", 404)
+        try:
+            status = repair_tenant_database(company_row)
+            docs_path = tenant_documents_path(company_row)
+            docs_path.mkdir(parents=True, exist_ok=True)
+            copied_templates = copy_standard_templates_to_company(docs_path)
+        except Exception as exc:
+            app.logger.exception("Company storage repair failed")
+            return json_error(f"Repararea bazei a eșuat: {type(exc).__name__}: {exc}", 500)
+        security_audit(
+            "COMPANY_STORAGE_REPAIRED",
+            user_id=g.user["id"],
+            company_id=company_id,
+            details=f"created={status.get('created')}; db={status['path']}; templates={copied_templates}",
+        )
+        return jsonify(ok=True, storage=status, templates_copied=copied_templates)
 
     @app.post("/api/admin/users")
     @auth_required

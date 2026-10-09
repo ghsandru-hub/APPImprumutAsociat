@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import re
+import shutil
 import sqlite3
-from datetime import date, datetime, timedelta
+import subprocess
+from datetime import date, timedelta
 from html import unescape
 from urllib.request import Request, urlopen
 
@@ -73,53 +74,187 @@ def audit(con: sqlite3.Connection, action: str, entity: str, *, entity_id: int |
     )
 
 
-def normalize_html_text(raw_html: str) -> str:
-    text = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", " ", raw_html)
+def normalize_html_text(raw_html: str, *, include_scripts: bool = False) -> str:
+    """Transformă HTML-ul BNR într-un text stabil pentru parsare."""
+    text = raw_html
+    if not include_scripts:
+        text = re.sub(r"(?is)<script.*?</script>", " ", text)
+    text = re.sub(r"(?is)<style.*?</style>", " ", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = unescape(text)
+    text = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        lambda match: chr(int(match.group(1), 16)),
+        text,
+    )
+    text = text.replace(r"\/", "/").replace("\xa0", " ")
     return re.sub(r"\s+", " ", text).strip()
 
 
+RO_DATE_PATTERN = (
+    r"(?:\d{1,2}[./-]\d{1,2}[./-]\d{4}"
+    r"|\d{1,2}\s+[A-Za-zăâîșțşţĂÂÎȘȚŞŢ]{3,15}\.?\s*\d{4})"
+)
+
+
 def parse_ro_date(text: str) -> str | None:
-    match = re.search(r"(\d{1,2})\s+([A-Za-zăâîșțĂÂÎȘȚ]+)\.?\s*(\d{4})", text)
+    value = re.sub(r"\s+", " ", text.strip())
+    numeric = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", value)
+    try:
+        if numeric:
+            return date(int(numeric.group(3)), int(numeric.group(2)), int(numeric.group(1))).isoformat()
+        match = re.fullmatch(
+            r"(\d{1,2})\s+([A-Za-zăâîșțşţĂÂÎȘȚŞŢ]+)\.?\s*(\d{4})",
+            value,
+        )
+        if not match:
+            return None
+        day = int(match.group(1))
+        month_token = (
+            match.group(2)
+            .lower()
+            .replace("ş", "ș")
+            .replace("ţ", "ț")
+            .rstrip(".")
+        )
+        month = MONTHS_RO.get(month_token) or MONTHS_RO.get(month_token[:3])
+        if not month:
+            return None
+        return date(int(match.group(3)), month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def _rate_from_window(text: str, start: int, end: int) -> float | None:
+    """Extrage prima rată plauzibilă imediat după o dată."""
+    window = text[start:end]
+    candidates: list[tuple[int, int, float]] = []
+    for match in re.finditer(
+        r"(?<!\d)(\d{1,2}(?:[,.]\d{1,4})?)(?!\d)\s*(%|p\.?\s*a\.?|la\s+sută)?",
+        window,
+        flags=re.I,
+    ):
+        token = match.group(1)
+        value = float(token.replace(",", "."))
+        if not 0 <= value <= 30:
+            continue
+        quality = 0 if ("," in token or "." in token or match.group(2)) else 1
+        candidates.append((quality, match.start(), value))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
+def _records_after_table_marker(text: str) -> list[tuple[str, float]]:
+    lower = text.casefold()
+    markers = []
+    for marker_pattern in (
+        r"valabile\s+din\s*:",
+        r"valabil[ăa]\s+din\s*:",
+        r"ratele?\s+dobânzilor\s+bnr[^.]{0,120}valabil[ăe]\s+din\s*:",
+    ):
+        markers.extend(match.end() for match in re.finditer(marker_pattern, lower, flags=re.I))
+    records: list[tuple[str, float]] = []
+    for marker in markers:
+        section = text[marker: marker + 20000]
+        date_matches = list(re.finditer(RO_DATE_PATTERN, section, flags=re.I))
+        for index, date_match in enumerate(date_matches):
+            effective_date = parse_ro_date(date_match.group(0))
+            if not effective_date:
+                continue
+            next_date_start = date_matches[index + 1].start() if index + 1 < len(date_matches) else len(section)
+            window_end = min(next_date_start, date_match.end() + 220)
+            rate = _rate_from_window(section, date_match.end(), window_end)
+            if rate is not None:
+                records.append((effective_date, rate))
+    return records
+
+
+def _direct_policy_rate(text: str) -> tuple[str, float] | None:
+    """Parsează cardul curent: denumire → Valabilă din → dată → rată."""
+    pattern = re.compile(
+        rf"rata\s+dobânzii\s+de\s+politică\s+monetară"
+        rf".{{0,260}}?valabil[ăa]\s+din\s+({RO_DATE_PATTERN})"
+        rf".{{0,180}}?([0-9]{{1,2}}(?:[,.][0-9]{{1,4}})?)\s*(?:%|p\.?\s*a\.?|la\s+sută)",
+        flags=re.I,
+    )
+    match = pattern.search(text)
     if not match:
         return None
-    day = int(match.group(1))
-    month_token = match.group(2).lower().replace("ş", "ș").replace("ţ", "ț")
-    month = MONTHS_RO.get(month_token) or MONTHS_RO.get(month_token[:3])
-    if not month:
+    effective_date = parse_ro_date(match.group(1))
+    if not effective_date:
         return None
-    return date(int(match.group(3)), month, day).isoformat()
+    return effective_date, float(match.group(2).replace(",", "."))
+
+
+def _generic_historical_records(text: str) -> list[tuple[str, float]]:
+    """Fallback pentru tabelul vechi BNR, inclusiv variantele Mobile.aspx."""
+    lower = text.casefold()
+    header_positions = [
+        match.end()
+        for match in re.finditer(r"rata\s+dobânzii\s+de\s+politică\s+monetară", lower, flags=re.I)
+    ]
+    records: list[tuple[str, float]] = []
+    for header_end in header_positions[:8]:
+        section = text[header_end: header_end + 15000]
+        date_matches = list(re.finditer(RO_DATE_PATTERN, section, flags=re.I))
+        for index, date_match in enumerate(date_matches):
+            before = section[max(0, date_match.start() - 120): date_match.start()].casefold()
+            if "ședinț" in before or "sedint" in before:
+                continue
+            effective_date = parse_ro_date(date_match.group(0))
+            if not effective_date:
+                continue
+            next_date_start = date_matches[index + 1].start() if index + 1 < len(date_matches) else len(section)
+            window_end = min(next_date_start, date_match.end() + 180)
+            rate = _rate_from_window(section, date_match.end(), window_end)
+            if rate is not None:
+                records.append((effective_date, rate))
+    return records
 
 
 def parse_bnr_rate_page(raw_html: str, source_url: str) -> dict:
-    text = normalize_html_text(raw_html)
-    date_match = re.search(
-        r"Valabil[ăa]\s+din\s+(\d{1,2})\s+([A-Za-zăâîșțĂÂÎȘȚ]+)\.?\s*(\d{4})",
-        text,
-        flags=re.I,
-    )
-    effective_date = None
-    if date_match:
-        effective_date = parse_ro_date(" ".join(date_match.groups()))
-    rate = None
-    if date_match:
-        nearby = text[date_match.end():date_match.end() + 250]
-        rate_match = re.search(r"([0-9]+(?:[,.][0-9]+)?)\s*%", nearby)
-        if rate_match:
-            rate = float(rate_match.group(1).replace(",", "."))
-    if rate is None:
-        rate_match = re.search(
-            r"rata dobânzii de politică monetară.{0,500}?(?:nivelul de\s+)?([0-9]+(?:[,.][0-9]+)?)\s*(?:la sută|%)",
-            text,
-            flags=re.I,
-        )
-        if rate_match:
-            rate = float(rate_match.group(1).replace(",", "."))
-    if rate is None or effective_date is None:
-        raise ValueError("Pagina BNR a fost accesată, dar rata sau data de intrare în vigoare nu au putut fi identificate automat.")
-    if not 0 <= rate <= 30:
-        raise ValueError("Valoarea identificată în pagina BNR este în afara intervalului de control.")
+    attempts = [
+        normalize_html_text(raw_html, include_scripts=False),
+        normalize_html_text(raw_html, include_scripts=True),
+    ]
+
+    # Prioritate 1: cardul curent, care leagă explicit denumirea ratei de data
+    # aplicării și de valoare.
+    for text in attempts:
+        direct = _direct_policy_rate(text)
+        if direct and 0 <= direct[1] <= 30:
+            effective_date, rate = direct
+            break
+    else:
+        # Prioritate 2: tabelul oficial după marcajul „Valabile din”.
+        table_records: list[tuple[str, float]] = []
+        for text in attempts:
+            table_records.extend(_records_after_table_marker(text))
+        table_valid = {
+            (effective_date, round(rate, 4))
+            for effective_date, rate in table_records
+            if 0 <= rate <= 30
+        }
+        if table_valid:
+            effective_date, rate = max(table_valid, key=lambda item: item[0])
+        else:
+            # Prioritate 3: structura istorică veche/Mobile.aspx.
+            fallback_records: list[tuple[str, float]] = []
+            for text in attempts:
+                fallback_records.extend(_generic_historical_records(text))
+            fallback_valid = {
+                (effective_date, round(rate, 4))
+                for effective_date, rate in fallback_records
+                if 0 <= rate <= 30
+            }
+            if not fallback_valid:
+                raise ValueError(
+                    "Pagina BNR a fost accesată, dar tabelul/cardul cu rata și data de "
+                    "intrare în vigoare nu a putut fi identificat automat."
+                )
+            effective_date, rate = max(fallback_valid, key=lambda item: item[0])
     return {
         "effective_date": effective_date,
         "rate": round(rate, 4),
@@ -127,22 +262,83 @@ def parse_bnr_rate_page(raw_html: str, source_url: str) -> dict:
         "source_url": source_url,
         "source_document": "Pagina oficială BNR – rata dobânzii de politică monetară",
         "entry_mode": "BNR_AUTO",
-        "notes": "Preluare automată din sursa oficială BNR.",
+        "notes": "Preluare automată din sursa oficială BNR; parser card/tabel cu fallback.",
     }
+
+
+def _decode_response_body(body: bytes, charset: str | None = None) -> str:
+    for encoding in (charset, "utf-8", "cp1250", "iso-8859-2"):
+        if not encoding:
+            continue
+        try:
+            return body.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return body.decode("utf-8", "replace")
+
+
+def _fetch_url_urllib(url: str) -> str:
+    req = Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36 "
+                f"LoanCopilot/{APP_VERSION}"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.6",
+            "Accept-Encoding": "identity",
+            "Cache-Control": "no-cache",
+        },
+    )
+    with urlopen(req, timeout=25) as response:
+        body = response.read(5 * 1024 * 1024 + 1)
+        if len(body) > 5 * 1024 * 1024:
+            raise ValueError("Răspunsul BNR depășește limita de 5 MB.")
+        charset = response.headers.get_content_charset()
+    return _decode_response_body(body, charset)
+
+
+def _fetch_url_curl(url: str) -> str:
+    curl = shutil.which("curl")
+    if not curl:
+        raise RuntimeError("curl nu este disponibil pe server pentru metoda de rezervă.")
+    completed = subprocess.run(
+        [
+            curl,
+            "--fail", "--silent", "--show-error", "--location",
+            "--max-time", "30", "--connect-timeout", "10", "--compressed",
+            "--user-agent", f"Mozilla/5.0 LoanCopilot/{APP_VERSION}",
+            "--header", "Accept-Language: ro-RO,ro;q=0.9,en;q=0.6",
+            url,
+        ],
+        capture_output=True,
+        timeout=35,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(detail or f"curl s-a încheiat cu codul {completed.returncode}.")
+    if len(completed.stdout) > 5 * 1024 * 1024:
+        raise ValueError("Răspunsul BNR depășește limita de 5 MB.")
+    return _decode_response_body(completed.stdout)
 
 
 def fetch_current_bnr_rate() -> dict:
     errors = []
     for url in BNR_RATE_URLS:
-        try:
-            req = Request(url, headers={"User-Agent": f"LoanCopilot/{APP_VERSION} Mozilla/5.0"})
-            with urlopen(req, timeout=25) as response:
-                raw = response.read().decode("utf-8", "ignore")
-            return parse_bnr_rate_page(raw, url)
-        except Exception as exc:
-            errors.append(f"{url}: {exc}")
-    raise RuntimeError("Actualizarea automată BNR nu a reușit. Verificați conexiunea sau introduceți rata manual. " + " | ".join(errors))
-
+        for method_name, fetcher in (("urllib", _fetch_url_urllib), ("curl", _fetch_url_curl)):
+            try:
+                raw = fetcher(url)
+                return parse_bnr_rate_page(raw, url)
+            except Exception as exc:
+                errors.append(f"{method_name} {url}: {type(exc).__name__}: {exc}")
+    detail = " | ".join(errors[-10:])
+    raise RuntimeError(
+        "Actualizarea automată BNR nu a reușit. Au fost încercate paginile "
+        "oficiale prin urllib și curl. Detalii: " + detail
+    )
 
 def rate_row_for_day(con: sqlite3.Connection, day: date) -> sqlite3.Row:
     row = con.execute(
@@ -212,48 +408,71 @@ def calculate_period(con: sqlite3.Connection, loan: sqlite3.Row, start: date, en
     }
 
 
-def recalculate_all(con: sqlite3.Connection, *, user_email: str = "system", sync_recognized: bool = False, cutoff: date | None = None) -> int:
+def recalculate_loan(
+    con: sqlite3.Connection,
+    loan_id: int,
+    *,
+    sync_recognized: bool = False,
+    cutoff: date | None = None,
+) -> int:
+    loan = con.execute("SELECT * FROM loans WHERE id=?", (loan_id,)).fetchone()
+    if not loan or loan["status"] == "CLOSED" or not loan["interest_start_date"]:
+        return 0
+
+    start = parse_date(loan["interest_start_date"])
+    maturity = parse_date(loan["maturity_date"]) if loan["maturity_date"] else (cutoff or date.today())
+    effective_cutoff = min(cutoff or date.today(), maturity)
     count = 0
-    loans = con.execute("SELECT * FROM loans WHERE status<>'CLOSED' ORDER BY id").fetchall()
-    for loan in loans:
-        if not loan["interest_start_date"]:
-            continue
-        start = parse_date(loan["interest_start_date"])
-        maturity = parse_date(loan["maturity_date"]) if loan["maturity_date"] else (cutoff or date.today())
-        effective_cutoff = min(cutoff or date.today(), maturity)
-        for period_start, period_end in iter_completed_quarters(start, effective_cutoff, include_partial_end=False):
-            calc = calculate_period(con, loan, period_start, period_end)
-            existing = con.execute(
-                "SELECT id,status,recognized_amount FROM interest_accruals WHERE loan_id=? AND period_start=? AND period_end=?",
-                (loan["id"], calc["period_start"], calc["period_end"]),
-            ).fetchone()
-            notes = f"Rată BNR variabilă · Actual/365 · {calc['rate_summary']}."
-            if existing:
-                recognized = calc["calculated_amount"] if sync_recognized and existing["status"] == "RECOGNIZED" else existing["recognized_amount"]
-                con.execute(
-                    """UPDATE interest_accruals SET opening_balance=?,principal_advances=?,principal_repayments=?,
-                       closing_balance=?,days=?,calculated_amount=?,recognized_amount=?,notes=? WHERE id=?""",
-                    (calc["opening_balance"], calc["principal_advances"], calc["principal_repayments"], calc["closing_balance"],
-                     calc["days"], calc["calculated_amount"], recognized, notes, existing["id"]),
-                )
-                accrual_id = existing["id"]
-            else:
-                cur = con.execute(
-                    """INSERT INTO interest_accruals(loan_id,period_start,period_end,opening_balance,principal_advances,
-                       principal_repayments,closing_balance,days,calculated_amount,recognized_amount,status,notes)
-                       VALUES(?,?,?,?,?,?,?,?,?,0,'CALCULATED',?)""",
-                    (loan["id"], calc["period_start"], calc["period_end"], calc["opening_balance"], calc["principal_advances"],
-                     calc["principal_repayments"], calc["closing_balance"], calc["days"], calc["calculated_amount"], notes),
-                )
-                accrual_id = cur.lastrowid
-            con.execute("DELETE FROM interest_segments WHERE accrual_id=?", (accrual_id,))
-            con.executemany(
-                """INSERT INTO interest_segments(accrual_id,bnr_rate_id,segment_start,segment_end,days,rate,balance_days,calculated_amount)
-                   VALUES(?,?,?,?,?,?,?,?)""",
-                [(accrual_id, item["bnr_rate_id"], item["segment_start"], item["segment_end"], item["days"], item["rate"],
-                  item["balance_days"], item["calculated_amount"]) for item in calc["segments"]],
+
+    for period_start, period_end in iter_completed_quarters(start, effective_cutoff, include_partial_end=False):
+        calc = calculate_period(con, loan, period_start, period_end)
+        existing = con.execute(
+            "SELECT id,status,recognized_amount FROM interest_accruals WHERE loan_id=? AND period_start=? AND period_end=?",
+            (loan["id"], calc["period_start"], calc["period_end"]),
+        ).fetchone()
+        notes = f"Rată BNR variabilă · Actual/365 · {calc['rate_summary']}."
+        if existing:
+            recognized = (
+                calc["calculated_amount"]
+                if sync_recognized and existing["status"] == "RECOGNIZED"
+                else existing["recognized_amount"]
             )
-            count += 1
+            con.execute(
+                """UPDATE interest_accruals SET opening_balance=?,principal_advances=?,principal_repayments=?,
+                   closing_balance=?,days=?,calculated_amount=?,recognized_amount=?,notes=? WHERE id=?""",
+                (calc["opening_balance"], calc["principal_advances"], calc["principal_repayments"], calc["closing_balance"],
+                 calc["days"], calc["calculated_amount"], recognized, notes, existing["id"]),
+            )
+            accrual_id = existing["id"]
+        else:
+            cur = con.execute(
+                """INSERT INTO interest_accruals(loan_id,period_start,period_end,opening_balance,principal_advances,
+                   principal_repayments,closing_balance,days,calculated_amount,recognized_amount,status,notes)
+                   VALUES(?,?,?,?,?,?,?,?,?,0,'CALCULATED',?)""",
+                (loan["id"], calc["period_start"], calc["period_end"], calc["opening_balance"], calc["principal_advances"],
+                 calc["principal_repayments"], calc["closing_balance"], calc["days"], calc["calculated_amount"], notes),
+            )
+            accrual_id = cur.lastrowid
+        con.execute("DELETE FROM interest_segments WHERE accrual_id=?", (accrual_id,))
+        con.executemany(
+            """INSERT INTO interest_segments(accrual_id,bnr_rate_id,segment_start,segment_end,days,rate,balance_days,calculated_amount)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            [(accrual_id, item["bnr_rate_id"], item["segment_start"], item["segment_end"], item["days"], item["rate"],
+              item["balance_days"], item["calculated_amount"]) for item in calc["segments"]],
+        )
+        count += 1
+    return count
+
+
+def recalculate_all(con: sqlite3.Connection, *, user_email: str = "system", sync_recognized: bool = False, cutoff: date | None = None) -> int:
+    loan_ids = [
+        int(row["id"])
+        for row in con.execute("SELECT id FROM loans WHERE status<>'CLOSED' ORDER BY id").fetchall()
+    ]
+    count = sum(
+        recalculate_loan(con, loan_id, sync_recognized=sync_recognized, cutoff=cutoff)
+        for loan_id in loan_ids
+    )
     latest = con.execute("SELECT rate FROM bnr_reference_rates ORDER BY effective_date DESC,id DESC LIMIT 1").fetchone()
     if latest:
         con.execute("UPDATE loans SET interest_rate=? WHERE interest_rate_mode='BNR_REFERENCE'", (latest["rate"],))
