@@ -1,0 +1,21 @@
+ȘABLOANE STANDARD LOANCOPILOT
+
+Acest folder conține documente editabile pentru companiile noi.
+
+Reguli de utilizare:
+1. Descărcați șablonul din tabul „Șabloane” al aplicației.
+2. Completați câmpurile marcate între |~ și ~|.
+3. Duplicați șabloanele individuale pentru fiecare asociat/creditor.
+4. Salvați documentul completat în dosarul companiei și adăugați-l în registrul „Documente”.
+5. După semnare, încărcați versiunea PDF semnată în dreptul documentului original.
+
+Câmpuri uzuale:
+|~CompanieNume~|, |~CompanieCUI~|, |~CompanieNrRC~|, |~CompanieSediu~|
+|~AdministratorNume~|, |~ReprezentantSocietate~|
+|~AsociatNume~|, |~AsociatCNP~|, |~AsociatAdresa~|, |~AsociatActIdentitate~|
+|~ContractNumar~|, |~DataSemnareContract~|, |~DataEfecteContract~|
+|~DataScadentaInitiala~|, |~DataScadentaFinala~|
+|~SoldTotal4551~|, |~SoldAsociat1~|, |~SoldAsociat2~|
+|~RataBNR~|, |~DataRataBNR~|, |~DataInceputDobanda~|
+
+Șabloanele nu înlocuiesc verificarea juridică, contabilă și fiscală pentru situația concretă a companiei.

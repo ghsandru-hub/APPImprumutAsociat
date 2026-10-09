@@ -1,0 +1,17 @@
+/*
+!/.gitignore
+!/README.md
+!/01 Aplicatia/
+
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite-*
+*.db
+.env
+.env.*
+*.key
+/01 Aplicatia/private/documente/
+/01 Aplicatia/private/secrets/
+/01 Aplicatia/private/logs/
+/01 Aplicatia/private/backup/

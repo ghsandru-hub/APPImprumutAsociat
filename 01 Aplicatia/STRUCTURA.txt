@@ -1,0 +1,46 @@
+LoanCopilot 2.5.0 — structură de producție
+
+/home/aiallro/
+├── loancopilot_app/                         # Application root CloudLinux/Passenger
+│   ├── passenger_wsgi.py                    # startup file; entry point: application
+│   ├── requirements.txt
+│   └── tmp/restart.txt
+│
+├── loancopilot.aiall.ro/                    # document root public al subdomeniului
+│   ├── .htaccess
+│   └── robots.txt
+│
+├── loancopilot.privat/                      # cod și date nepublice
+│   ├── app/                                 # aplicația Flask
+│   │   ├── manage.py
+│   │   ├── requirements.txt
+│   │   ├── wsgi.py
+│   │   └── loancopilot/
+│   │       ├── app.py
+│   │       ├── docx_print.py                # DOCX → previzualizare browser / Print PDF
+│   │       └── ...
+│   ├── dbsqlite/
+│   │   ├── loancopilot_auth.sqlite          # utilizatori, firme, roluri, sesiuni, 2FA
+│   │   ├── companies/                       # câte o bază SQLite per companie
+│   │   └── seed/mtm_18235662.sqlite
+│   ├── documente/
+│   │   └── <slug-companie>/
+│   │       ├── *.docx                       # documente inițiale/editabile
+│   │       ├── sabloane/                    # copii pentru completarea companiei
+│   │       ├── word/<id-document>/          # versiuni Word
+│   │       ├── generate/<id-document>/      # PDF-uri server-side existente/opționale
+│   │       └── semnate/<id-document>/       # PDF-uri semnate, versionate
+│   ├── sabloane/
+│   │   ├── standard/
+│   │   └── custom/
+│   ├── backup/
+│   │   └── pre_2.5.0_documente_*/
+│   ├── logs/
+│   ├── scripts/
+│   │   ├── backup_all.sh
+│   │   ├── restart.sh
+│   │   └── check_document_workflow.py
+│   ├── secrets/
+│   └── tmp/
+│
+└── virtualenv/loancopilot_app/3.11/         # mediul CloudLinux
