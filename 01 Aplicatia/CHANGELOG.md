@@ -1,3 +1,7 @@
+## 2.6.19
+
+- Eliminat cardul informativ Separare multi-companie din bara laterală.
+
 ## 2.6.18
 
 - Antetele care aveau deja CUI pe un rând separat nu primesc încă un rând gol. Denumirea și CUI sunt aliniate la aceeași margine stângă, fără indentări sau spațieri moștenite suplimentare.

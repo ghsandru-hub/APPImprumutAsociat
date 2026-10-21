@@ -36,7 +36,6 @@
     <button data-page="settings"><span class="ico">⚙</span>Configurare</button>
     {% if user.is_superadmin or role == 'ADMIN' %}<a class="navlink" href="/admin"><span class="ico">♜</span>Administrare acces</a>{% endif %}
   </nav>
-  <div class="sideinfo"><b>Separare multi-companie</b><p>Compania activă determină baza SQLite și folderul privat de documente. Utilizatorii văd exclusiv companiile pentru care au rol atribuit.</p></div>
 </aside>
 <main>
   <section class="page active" id="page-dashboard">
