@@ -11,7 +11,7 @@
 <header>
   <button class="iconbtn mobilemenu" id="menuBtn" title="Meniu">☰</button>
   <div class="brand"><div class="logo">LC</div><div class="brand-copy"><b>LoanCopilot</b><small>împrumuturi asociați</small></div></div>
-  <div class="head-center"><strong id="companyName">{{ company.name }}</strong><span id="companyMeta">CUI {{ company.cui }} · Nr. RC {{ company.reg_com or 'necompletat' }}</span></div>
+  <div class="head-center"><span id="companyMeta">CUI {{ company.cui }} · Nr. RC {{ company.reg_com or 'necompletat' }}</span></div>
   <div class="head-actions">
     <select class="company-switch" id="companySwitch" aria-label="Companie activă">
       {% for item in companies %}<option value="{{ item.id }}" {% if item.id == company.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}

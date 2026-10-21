@@ -1,3 +1,7 @@
+## 2.6.16
+
+- Denumirea companiei apare o singură dată în antetul aplicației, în selector; datele fiscale rămân vizibile separat.
+
 ## 2.6.15
 
 - Paragrafele goale de la sfârșitul antetului nu adaugă spațiere suplimentară peste distanța configurată.
