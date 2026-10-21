@@ -1,3 +1,7 @@
+## 2.6.18
+
+- Antetele care aveau deja CUI pe un rând separat nu primesc încă un rând gol. Denumirea și CUI sunt aliniate la aceeași margine stângă, fără indentări sau spațieri moștenite suplimentare.
+
 ## 2.6.17
 
 - Selectorul companiei este deasupra CUI și numărului de Registru Comerț în același bloc al antetului.

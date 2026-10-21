@@ -663,10 +663,24 @@ class DocxPrintRenderer:
             return ""
         root = self._xml(member)
         # Company identity uses two lines, with a two-point increase over its Word size.
+        company_header = "CUI" in "".join(root.itertext())
         for paragraph in root.iter(w("p")):
-            if "CUI" not in "".join(paragraph.itertext()):
+            if not company_header:
                 continue
-            split = False
+            paragraph_text = "".join(paragraph.itertext()).strip()
+            properties = paragraph.find(w("pPr"))
+            if properties is None:
+                properties = ET.Element(w("pPr"))
+                paragraph.insert(0, properties)
+            for name, attributes in (("ind", {"left": "0", "right": "0", "firstLine": "0", "hanging": "0"}),
+                                     ("jc", {"val": "left"}),
+                                     ("spacing", {"before": "0", "after": "0", "line": "240", "lineRule": "auto"})):
+                value = properties.find(w(name))
+                if value is None:
+                    value = ET.SubElement(properties, w(name))
+                for key, item in attributes.items():
+                    value.set(w(key), item)
+            split = paragraph_text.startswith("CUI")
             for run in paragraph.iter(w("r")):
                 css = self._run_css(run, paragraph)
                 size = re.search(r"font-size:([\d.]+)pt", css)
