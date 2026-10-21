@@ -1,3 +1,8 @@
+## 2.6.12
+
+- Antetul de tipărire afișează compania pe primul rând și datele fiscale pe al doilea, cu font mărit cu 2 pt.
+- Linia subsolului este deasupra numelui fișierului și paginării.
+
 ## 2.6.11
 
 - Rambursarea folosește iconul minus, distinct de săgeata pentru deschiderea documentului.

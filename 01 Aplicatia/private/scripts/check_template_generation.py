@@ -139,6 +139,21 @@ class GenerationChecks(unittest.TestCase):
         self.assertEqual(history["word_items"][0]["sha256"], hashlib.sha256(content).hexdigest())
         self.assertEqual(len(self.client.get("/api/documents").json["items"]), 1)
 
+    def test_print_header_two_lines_larger_font_and_footer_below_rule(self):
+        response = self.post("/api/documents/generate", self.request_data())
+        self.assertEqual(response.status_code, 200, response.json)
+        printed = self.client.get(response.json["print_url"]).get_data(as_text=True)
+        import re
+        header = re.search(r'<template id="firstHeaderTemplate">(.*?)</template>', printed, re.S)[1]
+        self.assertIn("Compania QA", header)
+        self.assertIn("<br>", header)
+        self.assertLess(header.index("Compania QA"), header.index("<br>"))
+        self.assertGreater(header.index("CUI"), header.index("<br>"))
+        self.assertIn("font-size:9.00pt", header)
+        footer = re.search(r"\.word-page-footer\{([^}]+)", printed)[1]
+        self.assertIn("border-top:", footer)
+        self.assertNotIn("border-bottom:", footer)
+
     def test_generated_numbers_follow_register_and_cannot_be_overridden(self):
         with self.db.tenant_connect(self.company) as con:
             con.execute("INSERT INTO documents(doc_type,doc_no,doc_date,status) VALUES(?,?,?,?)", ("Manual", "56", "2027-01-01", "READY_FOR_SIGNATURE"))

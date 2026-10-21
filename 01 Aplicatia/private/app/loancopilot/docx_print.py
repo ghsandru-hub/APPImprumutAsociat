@@ -662,6 +662,35 @@ class DocxPrintRenderer:
         if member not in self.archive.namelist():
             return ""
         root = self._xml(member)
+        # Company identity uses two lines, with a two-point increase over its Word size.
+        for paragraph in root.iter(w("p")):
+            if "CUI" not in "".join(paragraph.itertext()):
+                continue
+            split = False
+            for run in paragraph.iter(w("r")):
+                css = self._run_css(run, paragraph)
+                size = re.search(r"font-size:([\d.]+)pt", css)
+                points = float(size[1]) if size else 11.0
+                properties = run.find(w("rPr"))
+                if properties is None:
+                    properties = ET.Element(w("rPr"))
+                    run.insert(0, properties)
+                for name in ("sz", "szCs"):
+                    value = properties.find(w(name))
+                    if value is None:
+                        value = ET.SubElement(properties, w(name))
+                    value.set(w("val"), str(round((points + 2) * 2)))
+                for node in list(run):
+                    if node.tag != w("t") or split or "CUI" not in (node.text or ""):
+                        continue
+                    before, after = node.text.split("CUI", 1)
+                    index = list(run).index(node)
+                    node.text = before.rstrip()
+                    run.insert(index + 1, ET.Element(w("br")))
+                    details = ET.Element(w("t"))
+                    details.text = "CUI" + after
+                    run.insert(index + 2, details)
+                    split = True
         rels, base_dir = self._part_rels(target)
         blocks = self._render_blocks(list(root), rels, base_dir, allow_page_breaks=False)[0]
         return "".join(blocks)
@@ -699,7 +728,7 @@ class DocxPrintRenderer:
             f'<div class="word-explicit-page">{"".join(blocks)}</div>'
             for blocks in explicit_pages
         )
-        top = max(self.setup.top_mm, 19.0)
+        top = max(self.setup.top_mm, self.setup.header_mm + 13.0, 19.0)
         bottom = max(self.setup.bottom_mm, 17.0)
         left = max(self.setup.left_mm, 12.0)
         right = max(self.setup.right_mm, 12.0)
@@ -727,7 +756,7 @@ html,body{{margin:0;padding:0;background:#e9ecef;color:#202326;font-family:Aptos
 .word-page:last-child{{break-after:auto;page-break-after:auto}}
 .word-page-header{{position:absolute;top:{self.setup.header_mm:.3f}mm;left:var(--page-left);right:var(--page-right);min-height:8mm}}
 .word-page-body{{position:absolute;top:var(--page-top);right:var(--page-right);bottom:var(--page-bottom);left:var(--page-left);overflow:hidden;font-size:11pt;line-height:1.12}}
-.word-page-footer{{position:absolute;left:var(--page-left);right:var(--page-right);bottom:{self.setup.footer_mm:.3f}mm;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:.25pt solid #343434;padding-bottom:2.5mm;color:#555a5f;font-size:8pt;white-space:nowrap}}
+.word-page-footer{{position:absolute;left:var(--page-left);right:var(--page-right);bottom:{self.setup.footer_mm:.3f}mm;display:flex;justify-content:space-between;align-items:flex-end;border-top:.25pt solid #343434;padding-top:2.5mm;color:#555a5f;font-size:8pt;white-space:nowrap}}
 .word-paragraph{{margin:0 0 6pt 0;white-space:normal;overflow-wrap:break-word}}
 .word-tab-row{{display:flex;width:100%;justify-content:space-between;align-items:baseline;gap:10mm}}
 .word-tab-row>span{{min-width:0}}
