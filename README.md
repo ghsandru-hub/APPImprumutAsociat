@@ -1,6 +1,8 @@
 # APPImprumutAsociat
 
-Codul aplicației LoanCopilot 2.6.4, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
+Codul aplicației LoanCopilot 2.6.5, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
+
+Versiunea 2.6.5 permite alegerea orientării Portrait / Landscape direct în scadențar, pentru previzualizare și tipărire / Save as PDF.
 
 Versiunea 2.6.4 adaugă „Contracte de împrumut → Scadențar / Print”: selectați data de referință și toate contractele sau un singur contract, actualizați raportul și folosiți „Tipărește / Salvează PDF”. Raportul prezintă mișcările cronologic, soldurile după fiecare mișcare și rata anuală aplicabilă, inclusiv schimbările de rată BNR. Dobânda calculată, cea recunoscută și plățile rămân distincte. Sunt excluse operațiunile ulterioare datei alese; raportul nu recalculează dobânzi și nu reconstituie versiunile anterioare ale datelor modificate.
 

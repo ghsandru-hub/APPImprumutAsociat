@@ -1,3 +1,7 @@
+## 2.6.5
+
+- Selector Portrait / Landscape în scadențar; orientarea se aplică imediat previzualizării și tipăririi / Save as PDF și se păstrează la actualizarea raportului.
+
 ## 2.6.4
 
 - Scadențar de tipărit / Save as PDF, cu data de referință și contract selectabile, disponibil din Contracte de împrumut.

@@ -822,6 +822,9 @@ def create_app() -> Flask:
     @app.get("/reports/schedule")
     @company_required
     def print_schedule():
+        orientation = request.args.get("orientation", "landscape")
+        if orientation not in {"portrait", "landscape"}:
+            abort(400, description="Orientarea trebuie să fie Portrait sau Landscape.")
         try:
             as_of = date.fromisoformat(request.args.get("as_of") or date.today().isoformat())
             loan_id = int(request.args["loan_id"]) if request.args.get("loan_id") else None
@@ -837,7 +840,7 @@ def create_app() -> Flask:
                 "SELECT l.id,l.contract_no,a.name associate_name FROM loans l JOIN associates a ON a.id=l.associate_id ORDER BY l.contract_no,l.id"
             ).fetchall())
         response = make_response(render_template("schedule_print.html", report=report, contracts=contracts,
-                                                selected_loan=loan_id, version=APP_VERSION))
+                                                selected_loan=loan_id, orientation=orientation, version=APP_VERSION))
         response.headers["Cache-Control"] = "private, no-store"
         return response
 
