@@ -782,6 +782,11 @@ footer {
   content: attr(data-icon);
   font-size: 18px;
   line-height: 1;
+  transform: translateY(-1.5px);
+}
+
+.btn.small.action-icon::before {
+  transform: translateY(-.75px);
 }
 
 .btn.small.action-icon {

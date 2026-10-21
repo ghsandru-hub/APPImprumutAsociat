@@ -1,3 +1,7 @@
+## 2.6.8
+
+- Corecție optică verticală pentru centrarea formei vizibile a iconurilor în conturul butoanelor.
+
 ## 2.6.7
 
 - Câmpurile de input și selectoarele folosesc stilul aplicației inclusiv în tabele și filtre, cu suport light/dark pentru controalele native.
