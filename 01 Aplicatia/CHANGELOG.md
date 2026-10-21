@@ -1,3 +1,7 @@
+## 2.6.14
+
+- Spațiul după antet este de 1,5 rânduri pe prima pagină și un rând pe paginile următoare, în funcție de înălțimea de rând a documentului.
+
 ## 2.6.13
 
 - Registrul afișează starea PDF fără buton redundant; tipărirea/PDF are o singură acțiune în meniu. Încărcarea PDF-ului semnat are icon distinct.
