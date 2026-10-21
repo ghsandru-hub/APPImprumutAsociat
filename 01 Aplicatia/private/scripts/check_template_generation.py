@@ -139,6 +139,25 @@ class GenerationChecks(unittest.TestCase):
         self.assertEqual(history["word_items"][0]["sha256"], hashlib.sha256(content).hexdigest())
         self.assertEqual(len(self.client.get("/api/documents").json["items"]), 1)
 
+    def test_generated_numbers_follow_register_and_cannot_be_overridden(self):
+        with self.db.tenant_connect(self.company) as con:
+            con.execute("INSERT INTO documents(doc_type,doc_no,doc_date,status) VALUES(?,?,?,?)", ("Manual", "56", "2027-01-01", "READY_FOR_SIGNATURE"))
+            con.commit()
+        data = {**self.request_data(), "doc_no": "999", "fields": {"DocumentNumar": "999"}}
+        context = self.post("/api/documents/template-context", data)
+        self.assertEqual(next(f["value"] for f in context.json["fields"] if f["name"] == "DocumentNumar"), "57")
+        for number in ["57", "58"]:
+            response = self.post("/api/documents/generate", data)
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(response.json["doc_no"], number)
+            with self.client.get(response.json["download_url"]) as download:
+                with zipfile.ZipFile(io.BytesIO(download.data)) as archive:
+                    body = self.docx.text(minidom.parseString(archive.read("word/document.xml")))
+                    self.assertIn("Nr. " + number + " din", body)
+                    self.assertNotIn("Nr. 999", body)
+            with self.db.tenant_connect(self.company) as con:
+                self.assertEqual(con.execute("SELECT doc_no FROM documents WHERE id=?", (response.json["id"],)).fetchone()[0], number)
+
     def test_interest_company_not_repeated_in_new_or_legacy_print(self):
         response = self.post("/api/documents/generate", self.request_data())
         self.assertEqual(response.status_code, 200, response.json)

@@ -269,7 +269,7 @@ async function loadDocumentContext(){
   try{
     const d=await api('/api/documents/template-context',{method:'POST',body:JSON.stringify(generatorPayload())});
     if(revision!==state.generatorRevision)return;
-    document.getElementById('generatorFields').innerHTML=d.fields.map((f,i)=>`<div class="field span2"><label for="generatorField${i}">${esc(f.name)}</label><input id="generatorField${i}" data-template-field="${esc(f.name)}" value="${esc(f.value)}" maxlength="5000" required></div>`).join('');
+    document.getElementById('generatorFields').innerHTML=d.fields.map((f,i)=>`<div class="field span2"><label for="generatorField${i}">${esc(f.name)}</label><input id="generatorField${i}" data-template-field="${esc(f.name)}" value="${esc(f.value)}" ${f.name==='DocumentNumar'?'readonly':''} maxlength="5000" required></div>`).join('');
     document.getElementById('generatorInterestSummary').textContent=`${d.interest_count} linii de dobândă · calculată ${money(d.calculated_total)} · recunoscută ${money(d.recognized_total)}. Verificați câmpurile preluate înainte de generare.`;
     document.getElementById('generatorSubmit').disabled=false;
   }catch(e){if(revision===state.generatorRevision)error.textContent=e.message}
@@ -282,7 +282,7 @@ async function generateDocumentFromTemplate(e){
     const d=await api('/api/documents/generate',{method:'POST',body:JSON.stringify({...generatorPayload(),fields})});
     document.getElementById('documentGeneratorForm').classList.add('is-hidden');
     const result=document.getElementById('generatorResult');result.classList.remove('is-hidden');
-    result.innerHTML=`<p><b>Document generat și salvat în registru.</b></p><p>${esc(d.filename)}</p><div class="formactions"><a class="action-icon btn" href="${esc(d.download_url)}" data-icon="↓" title="Descarcă Word" aria-label="Descarcă Word">Descarcă Word</a><a class="action-icon btn primary" target="_blank" rel="noopener" href="${esc(d.print_url)}" data-icon="↗" title="Previzualizează / PDF" aria-label="Previzualizează / PDF">Previzualizează / PDF</a><button class="action-icon btn" onclick="closeModal('documentGeneratorModal');showPage('documents')" data-icon="▤" title="Deschide registrul" aria-label="Deschide registrul">Deschide registrul</button></div>`;
+    result.innerHTML=`<p><b>Document nr. ${esc(d.doc_no)} generat și salvat în registru.</b></p><p>${esc(d.filename)}</p><div class="formactions"><a class="action-icon btn" href="${esc(d.download_url)}" data-icon="↓" title="Descarcă Word" aria-label="Descarcă Word">Descarcă Word</a><a class="action-icon btn primary" target="_blank" rel="noopener" href="${esc(d.print_url)}" data-icon="↗" title="Previzualizează / PDF" aria-label="Previzualizează / PDF">Previzualizează / PDF</a><button class="action-icon btn" onclick="closeModal('documentGeneratorModal');showPage('documents')" data-icon="▤" title="Deschide registrul" aria-label="Deschide registrul">Deschide registrul</button></div>`;
     await loadDocuments();toast('Document generat din datele selectate');
   }catch(x){document.getElementById('generatorError').textContent=x.message}finally{button.disabled=false;button.textContent='Generează și salvează în registru'}
 }
@@ -307,8 +307,20 @@ async function loadDocuments(){
     const editActions=canEdit
       ? `<button class="action-icon btn small" onclick="openWordUpload(${r.id})" data-icon="↺" title="↺ Înlocuiește Word" aria-label="↺ Înlocuiește Word">↺ Înlocuiește Word</button><button class="action-icon btn small" onclick="generatePdf(${r.id},this)" data-icon="⎙" title="PDF / Print" aria-label="PDF / Print">PDF / Print</button><button class="action-icon btn small" onclick="openGeneratedUpload(${r.id})" data-icon="↑" title="↑ PDF generat" aria-label="↑ PDF generat">↑ PDF generat</button><button class="action-icon btn small" onclick="openSignedUpload(${r.id})" data-icon="↑" title="↑ PDF semnat" aria-label="↑ PDF semnat">↑ PDF semnat</button><button class="action-icon btn small" onclick="showDocumentVersions(${r.id})" data-icon="◷" title="Istoric" aria-label="Istoric">Istoric</button><button class="action-icon btn small danger" onclick="deleteDocument(${r.id})" data-icon="🗑" title="Șterge" aria-label="Șterge">Șterge</button>`
       : `<button class="action-icon btn small" onclick="showDocumentVersions(${r.id})" data-icon="◷" title="Istoric" aria-label="Istoric">Istoric</button>`;
-    return `<tr><td>${esc(r.doc_date||'—')}</td><td><b>${esc(r.doc_type)}</b><div class="muted">${esc(r.doc_no||'fără număr')}</div></td><td>${esc(r.associate_name||'General')}<div class="muted">${esc(r.contract_no||'—')}</div></td><td>${word}</td><td>${generated}</td><td>${signed}</td><td><span class="pill ${r.status==='SIGNED'?'ok':'warn'}">${esc(r.status)}</span></td><td><div class="actions actions-start">${common}${editActions}</div></td></tr>`;
+    return `<tr><td>${esc(r.doc_date||'—')}</td><td><b>${esc(r.doc_type)}</b><div class="muted">${esc(r.doc_no||'fără număr')}</div></td><td>${esc(r.associate_name||'General')}<div class="muted">${esc(r.contract_no||'—')}</div></td><td>${word}</td><td>${generated}</td><td>${signed}</td><td><span class="pill ${r.status==='SIGNED'?'ok':'warn'}">${esc(r.status)}</span></td><td><button class="btn small action-icon" data-icon="☰" title="Acțiuni document" aria-label="Acțiuni document ${esc(r.doc_no||r.id)}" aria-controls="documentActions${r.id}" aria-expanded="false" onclick="toggleDocumentActions(${r.id},this)">Acțiuni</button><div popover id="documentActions${r.id}" class="document-actions">${(common+editActions).replaceAll('action-icon btn','document-action btn')}</div></td></tr>`;
   }).join(''):'<tr><td colspan="8" class="empty">Nu există documente.</td></tr>';
+}
+function toggleDocumentActions(id,button){
+  const menu=document.getElementById(`documentActions${id}`);
+  if(menu.matches(':popover-open')){menu.hidePopover();button.setAttribute('aria-expanded','false');return;}
+  document.querySelectorAll('.document-actions:popover-open').forEach(el=>el.hidePopover());
+  menu.showPopover();
+  const rect=button.getBoundingClientRect();
+  menu.style.left=`${Math.max(8,Math.min(rect.right-menu.offsetWidth,window.innerWidth-menu.offsetWidth-8))}px`;
+  menu.style.top=`${Math.max(8,Math.min(rect.bottom+4,window.innerHeight-menu.offsetHeight-8))}px`;
+  menu.ontoggle=()=>button.setAttribute('aria-expanded',String(menu.matches(':popover-open')));
+  menu.onclick=()=>menu.hidePopover();
+  button.setAttribute('aria-expanded','true');
 }
 function openDocumentModal(){docDate.value=new Date().toISOString().slice(0,10);openModal('docModal')}
 async function saveDocument(e){e.preventDefault();const loan=state.loans.find(l=>l.id===Number(docLoan.value));try{await api('/api/documents',{method:'POST',body:JSON.stringify({doc_type:docType.value,doc_no:docNo.value,doc_date:docDate.value,loan_id:docLoan.value||null,associate_id:loan?.associate_id||null,filename:docFilename.value,status:'READY_FOR_SIGNATURE',notes:docNotes.value})});closeModal('docModal');e.target.reset();await loadDocuments();toast('Document adăugat')}catch(x){toast(x.message,true)}}

@@ -1083,3 +1083,8 @@ footer {
     break-inside: avoid;
   }
 }
+
+.document-actions { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 210px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.document-actions:popover-open { display: grid; gap: 3px; }
+.document-actions .document-action { justify-content: flex-start; width: 100%; border-color: transparent; }
+.document-actions .document-action::before { content: attr(data-icon); width: 20px; text-align: center; }

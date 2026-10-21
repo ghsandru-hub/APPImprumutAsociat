@@ -1,3 +1,8 @@
+## 2.6.10
+
+- Acțiunile fiecărui document sunt grupate într-un meniu hamburger, cu acces la toate operațiunile existente.
+- Documentele generate primesc automat următorul număr numeric din registrul companiei; numărul din Word, numele fișierului și registru sunt identice și se alocă în tranzacție.
+
 ## 2.6.9
 
 - Previzualizarea fișelor de dobândă existente omite linia de companie duplicată atunci când denumirea și CUI sunt deja în antet. Fișierele Word arhivate rămân păstrate.

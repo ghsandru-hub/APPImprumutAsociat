@@ -1413,12 +1413,18 @@ def create_app() -> Flask:
             values[f"Contract{index}Numar"] = contract["contract_no"]
         return source, names, values, rows, segments, loan
 
+    def next_document_number(con):
+        numbers = [int(str(row[0]).strip()) for row in con.execute("SELECT doc_no FROM documents")
+                   if str(row[0] or "").strip().isascii() and str(row[0] or "").strip().isdigit()]
+        return str(max(numbers, default=0) + 1)
+
     @app.post("/api/documents/template-context")
     @role_required("EDITOR")
     def api_document_template_context():
         try:
             with tenant() as con:
                 source, names, values, rows, _, _ = document_template_context(payload(), con)
+                values["DocumentNumar"] = next_document_number(con)
             return jsonify(ok=True, fields=[{"name": n, "value": values.get(n, "")} for n in names if n != "DobanziTrimestriale"],
                            interest_count=len(rows), calculated_total=round(sum(r["calculated_amount"] for r in rows), 2),
                            recognized_total=round(sum(r["recognized_amount"] for r in rows), 2))
@@ -1432,16 +1438,15 @@ def create_app() -> Flask:
         created = None
         try:
             doc_date = date.fromisoformat(data.get("doc_date") or date.today().isoformat()).isoformat()
-            doc_no = str(data.get("doc_no") or "").strip()
-            if not doc_no:
-                return json_error("Introduceți numărul documentului.")
             with tenant() as con:
                 con.execute("BEGIN IMMEDIATE")
-                source, names, values, rows, segments, loan = document_template_context({**data, "doc_date": doc_date}, con)
+                doc_no = next_document_number(con)
+                source, names, values, rows, segments, loan = document_template_context({**data, "doc_no": doc_no, "doc_date": doc_date}, con)
                 overrides = data.get("fields", {})
                 if not isinstance(overrides, dict) or any(not isinstance(v, str) or len(v) > 5000 for v in overrides.values()):
                     return json_error("Câmpurile documentului sunt invalide.")
-                values.update({k: v.strip() for k, v in overrides.items() if k in names})
+                values.update({k: v.strip() for k, v in overrides.items() if k in names and k != "DocumentNumar"})
+                values["DocumentNumar"] = doc_no
                 missing = [n for n in names if n != "DobanziTrimestriale" and not str(values.get(n, "")).strip()]
                 if missing:
                     return json_error("Completați câmpurile: " + ", ".join(missing))
@@ -1467,7 +1472,7 @@ def create_app() -> Flask:
                             (item_id, relative, filename, DOCX_MIME, len(content), digest, provenance, g.user["email"]))
                 business.audit(con, "GENERATE_DOCUMENT", "documents", entity_id=item_id, details=provenance + "; sha256=" + digest, user_email=g.user["email"])
                 con.commit()
-            return jsonify(ok=True, id=item_id, filename=filename, download_url=url_for("download_document", item_id=item_id),
+            return jsonify(ok=True, id=item_id, doc_no=doc_no, filename=filename, download_url=url_for("download_document", item_id=item_id),
                            print_url=url_for("print_document_word", item_id=item_id))
         except (ValueError, TypeError, zipfile.BadZipFile, ExpatError) as exc:
             if created:
