@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scadențar la {{ report.as_of }} · {{ report.company.name }} · LoanCopilot</title>
+<style>
+:root{font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;color:#172a36;background:#edf1f4;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;font-size:13px;line-height:1.4}.toolbar{position:sticky;top:0;background:#fff;border-bottom:1px solid #d9e1e7;padding:14px 24px;z-index:1;display:flex;gap:12px;align-items:end;flex-wrap:wrap}.toolbar form{display:flex;align-items:end;flex-wrap:wrap;gap:12px;flex:1}.toolbar label{display:flex;flex-direction:column;gap:4px;font-weight:600}.toolbar input,.toolbar select,.toolbar button,.toolbar a{font:inherit;border:1px solid #bccbd4;border-radius:7px;padding:8px 12px;background:white;color:inherit}.toolbar button,.toolbar a{cursor:pointer;text-decoration:none}.toolbar .primary{background:#1f6f8b;color:#fff;border-color:#1f6f8b}.toolbar select{max-width:380px}.toolbar[data-theme=dark]{background:#171e24;color:#e4edf2;border-color:#34424d}.toolbar[data-theme=dark] input,.toolbar[data-theme=dark] select,.toolbar[data-theme=dark] button:not(.primary),.toolbar[data-theme=dark] a{background:#202b33;color:#e4edf2;border-color:#405563}
+.sheet{background:#fff;max-width:1200px;margin:24px auto;padding:30px 36px;box-shadow:0 4px 24px #172a3612}.brand{font-size:12px;color:#1f6f8b;font-weight:700;letter-spacing:.06em}.company{margin:14px 0 0;font-weight:700;font-size:18px}.company-meta{color:#526575;margin:4px 0 18px}h1{font-size:24px;margin:0 0 8px;color:#172a36}h2{font-size:16px;margin:24px 0 10px}.intro,.notes{color:#526575}.summary{display:flex;flex-wrap:wrap;gap:26px;margin:20px 0}.summary div{min-width:150px}.summary span{display:block;color:#526575;font-size:12px}.summary b{font-size:20px}.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #d9e1e7;padding:8px;text-align:left;vertical-align:top}th{background:#e9f0f4;font-weight:600}tfoot td{font-weight:700;background:#f5f7f8}.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.muted{color:#526575;font-size:11px}.overdue{font-weight:700;color:#a42929}.empty{text-align:center;padding:22px;color:#526575}.notes{font-size:11px;margin-top:20px}.signatures{display:flex;justify-content:space-between;margin-top:30px;gap:30px}.signatures div{min-width:200px}.footer{margin-top:26px;padding-top:10px;border-top:1px solid #d9e1e7;font-size:10px;color:#526575}
+@media(max-width:700px){.toolbar{position:static;padding:12px}.toolbar form{width:100%}.toolbar label{width:100%}.toolbar select{max-width:none;width:100%}.sheet{margin:12px 0;padding:20px 14px}.summary{gap:14px}.summary b{font-size:17px}.signatures{flex-direction:column}.tablewrap table{min-width:760px}}
+@page{size:A4 landscape;margin:14mm}
+@media print{html,body{background:#fff;color:#000;font-size:10pt}.toolbar{display:none!important}.sheet{box-shadow:none;margin:0;max-width:none;padding:0}.tablewrap{overflow:visible}.tablewrap table{min-width:0}table{font-size:8pt}th,td{padding:5px}thead{display:table-header-group}tfoot{display:table-row-group}tr{break-inside:avoid}h1,h2,.summary{break-after:avoid}h1{font-size:18pt}h2{font-size:12pt}.summary{gap:24px;margin:14px 0}.summary b{font-size:15pt}.brand,.company-meta,.intro,.notes,.muted,.footer{color:#333}.signatures{break-inside:avoid}.overdue{color:#000}a{color:inherit;text-decoration:none}}
+</style>
+</head>
+<body>
+{% macro money(value) -%}{{ '{:,.2f}'.format(value).replace(',', '_').replace('.', ',').replace('_', '.') }}{%- endmacro %}
+{% macro day(value) -%}{{ value[8:10] ~ '.' ~ value[5:7] ~ '.' ~ value[:4] if value else '—' }}{%- endmacro %}
+<div class="toolbar" id="scheduleToolbar">
+  <form method="get" action="/reports/schedule">
+    <label for="scheduleDate">Situație la data<input id="scheduleDate" name="as_of" type="date" value="{{ report.as_of }}" required></label>
+    <label for="scheduleLoan">Contract / creditor<select id="scheduleLoan" name="loan_id"><option value="">Toate contractele</option>{% for loan in contracts %}<option value="{{ loan.id }}" {% if loan.id == selected_loan %}selected{% endif %}>{{ loan.contract_no }} · {{ loan.associate_name }}</option>{% endfor %}</select></label>
+    <button type="submit">Actualizează raportul</button>
+  </form>
+  <button class="primary" type="button" onclick="window.print()">Tipărește / Salvează PDF</button>
+  <a href="/">Înapoi în aplicație</a>
+</div>
+<main class="sheet">
+  <div class="brand">smartBIZ · LoanCopilot</div>
+  <p class="company">{{ report.company.name }}</p>
+  <p class="company-meta">CUI {{ report.company.cui }}{% if report.company.reg_com %} · Nr. RC {{ report.company.reg_com }}{% endif %}{% if report.company.address %}<br>{{ report.company.address }}{% endif %}</p>
+  <h1>Scadențar la {{ day(report.as_of) }}</h1>
+  <p class="intro">Mișcări în ordine cronologică, sold după fiecare mișcare și rata anuală a dobânzii aplicabilă la acea dată. Sunt incluse înregistrările până la data de referință inclusiv. Sumele sunt în lei.</p>
+  <div class="summary">
+    <div><span>Sold principal la {{ day(report.as_of) }}</span><b>{{ money(report.totals.principal_balance) }} lei</b></div>
+    <div><span>Dobândă calculată cumulată</span><b>{{ money(report.totals.interest_calculated) }} lei</b></div>
+    <div><span>Sold dobândă recunoscută</span><b>{{ money(report.totals.interest_balance) }} lei</b></div>
+  </div>
+  {% for loan in report.loans %}
+  <h2>{{ loan.contract_no }} · {{ loan.associate_name }}</h2>
+  <p class="muted">Data contractului {{ day(loan.original_contract_date) }} · Scadență {{ day(loan.maturity_date) }} · Dobândă începând cu {{ day(loan.interest_start_date) }}</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Data</th><th>Mișcare / referință</th><th class="num">Mișcare principal<br>+ / −</th><th class="num">Sold principal</th><th class="num">Rată<br>% / an</th><th class="num">Dobândă<br>calculată</th><th class="num">Dobândă<br>recunoscută</th><th class="num">Dobândă<br>plătită brută</th><th class="num">Sold dobândă<br>recunoscută</th></tr></thead>
+    <tbody>{% for row in loan.events %}<tr><td>{{ day(row.date) }}</td><td>{{ row.label }}{% if row.reference %}<br><span class="muted">{{ row.reference }}</span>{% endif %}{% if row.other %}<br><span class="muted">Sumă {{ money(row.other) }} lei · fără efect asupra soldului principal</span>{% endif %}</td><td class="num">{{ ('+' if row.principal_delta > 0 else '') ~ money(row.principal_delta) if row.principal_delta else '—' }}</td><td class="num">{{ money(row.principal_balance) }}</td><td class="num">{{ money(row.rate) if row.rate is not none else 'Lipsă rată' }}</td><td class="num">{{ money(row.calculated) if row.calculated else '—' }}</td><td class="num">{{ money(row.recognized) if row.recognized else '—' }}</td><td class="num">{{ money(row.paid) if row.paid else '—' }}</td><td class="num">{{ money(row.interest_balance) }}</td></tr>{% else %}<tr><td colspan="9" class="empty">Nu există mișcări înregistrate până la această dată.</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="2">TOTAL MIȘCĂRI / SOLD FINAL</td><td class="num">{{ money(loan.funded - loan.repaid) }}</td><td class="num">{{ money(loan.principal_balance) }}</td><td></td><td class="num">{{ money(loan.interest_calculated) }}</td><td class="num">{{ money(loan.interest_recognized) }}</td><td class="num">{{ money(loan.interest_paid) }}</td><td class="num">{{ money(loan.interest_balance) }}</td></tr></tfoot>
+  </table></div>
+  {% else %}<p class="empty">Nu există contracte sau mișcări pentru această dată.</p>{% endfor %}
+  <h2>Reconcilierea soldurilor la {{ day(report.as_of) }}</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Contract / creditor</th><th class="num">Finanțări cumulate*</th><th class="num">Principal rambursat</th><th class="num">Sold principal</th><th class="num">Dobândă recunoscută</th><th class="num">Dobândă plătită brută</th><th class="num">Sold dobândă</th></tr></thead>
+    <tbody>{% for loan in report.loans %}<tr><td>{{ loan.contract_no }}<br><span class="muted">{{ loan.associate_name }}</span></td><td class="num">{{ money(loan.funded) }}</td><td class="num">{{ money(loan.repaid) }}</td><td class="num">{{ money(loan.principal_balance) }}</td><td class="num">{{ money(loan.interest_recognized) }}</td><td class="num">{{ money(loan.interest_paid) }}</td><td class="num">{{ money(loan.interest_balance) }}</td></tr>{% else %}<tr><td colspan="7" class="empty">Nu există contracte sau operațiuni pentru această dată.</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td>TOTAL</td>{% for key in ['funded','repaid','principal_balance','interest_recognized','interest_paid','interest_balance'] %}<td class="num">{{ money(report.totals[key]) }}</td>{% endfor %}</tr></tfoot>
+  </table></div>
+  <div class="notes">
+    <p>* Finanțările cumulate includ soldurile inițiale și alimentările înregistrate până la data raportului. Mișcările pozitive cresc principalul, iar rambursările îl reduc. Soldul dobânzii este dobânda recunoscută minus plățile brute, pe contract; dobânda calculată este prezentată separat.</p>
+    <p>În aceeași zi, se afișează întâi rata aplicabilă, apoi mișcările de principal în ordinea înregistrării, calculul dobânzii, recunoașterea și plățile de dobândă. Rata este zero înainte de data configurată de început a dobânzii. Pentru contractele cu rată BNR, se folosește istoricul ratelor înregistrate, inclusiv schimbările fără mișcări de sume.</p>
+    <p>Raportul folosește datele existente la generare; nu recalculează dobânda, nu creează operațiuni și nu reconstituie versiunile anterioare ale valorilor modificate. Pentru o dată din interiorul unui trimestru, dobânda calculată include doar perioadele deja înregistrate cu sfârșit până la acea dată.</p>
+  </div>
+  <div class="signatures"><div>Întocmit<br><br>____________________________</div><div>Verificat / aprobat<br><br>____________________________</div></div>
+  <div class="footer">LoanCopilot · v{{ version }} · Data de referință {{ day(report.as_of) }} · {{ report.loans|length }} {{ 'contract' if report.loans|length == 1 else 'contracte' }}</div>
+</main>
+<script>document.getElementById('scheduleToolbar').dataset.theme=localStorage.getItem('mtm-theme')||'light';</script>
+</body>
+</html>

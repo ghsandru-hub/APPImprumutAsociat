@@ -1,3 +1,9 @@
+## 2.6.4
+
+- Scadențar de tipărit / Save as PDF, cu data de referință și contract selectabile, disponibil din Contracte de împrumut.
+- Mișcări cronologice cu soldul principalului și al dobânzii recunoscute după fiecare mișcare, rata anuală aplicabilă și schimbările de rată BNR; dobânzile calculate, recunoscute și plătite sunt distincte.
+- Raportul este doar pentru citire și nu recalculează ori recunoaște automat dobânzi.
+
 ## 2.6.3
 
 - Dobânzi trimestriale: selecție de linii și preluare calculată → recunoscută, inclusiv actualizarea valorilor deja recunoscute, cu protecția sumelor plătite și audit.

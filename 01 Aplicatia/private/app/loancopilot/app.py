@@ -819,6 +819,28 @@ def create_app() -> Flask:
             ).fetchall()
             return jsonify(ok=True, items=business.rows_to_dicts(rows))
 
+    @app.get("/reports/schedule")
+    @company_required
+    def print_schedule():
+        try:
+            as_of = date.fromisoformat(request.args.get("as_of") or date.today().isoformat())
+            loan_id = int(request.args["loan_id"]) if request.args.get("loan_id") else None
+            if loan_id is not None and loan_id <= 0:
+                raise ValueError
+        except ValueError:
+            abort(400, description="Selectați o dată și un contract valide.")
+        with tenant() as con:
+            if loan_id and not con.execute("SELECT 1 FROM loans WHERE id=?", (loan_id,)).fetchone():
+                abort(404, description="Contractul nu există în compania curentă.")
+            report = business.schedule_at(con, as_of, loan_id)
+            contracts = business.rows_to_dicts(con.execute(
+                "SELECT l.id,l.contract_no,a.name associate_name FROM loans l JOIN associates a ON a.id=l.associate_id ORDER BY l.contract_no,l.id"
+            ).fetchall())
+        response = make_response(render_template("schedule_print.html", report=report, contracts=contracts,
+                                                selected_loan=loan_id, version=APP_VERSION))
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
     @app.post("/api/loans")
     @role_required("EDITOR")
     def api_create_loan():

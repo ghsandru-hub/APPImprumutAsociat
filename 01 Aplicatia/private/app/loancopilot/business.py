@@ -510,6 +510,74 @@ def dashboard(con: sqlite3.Connection) -> dict:
     return {"company": company, "loans": loans, "totals": totals, "recent": recent, "current_bnr_rate": dict(current_rate) if current_rate else None}
 
 
+def schedule_at(con: sqlite3.Connection, as_of: date, loan_id: int | None = None) -> dict:
+    """Chronological loan movements and running balances; no writes or forecasts."""
+    cutoff = as_of.isoformat()
+    loans = rows_to_dicts(con.execute(
+        """SELECT l.*,a.name associate_name FROM loans l JOIN associates a ON a.id=l.associate_id
+           WHERE (? IS NULL OR l.id=?) AND
+             (l.contract_date<=? OR EXISTS(SELECT 1 FROM transactions t WHERE t.loan_id=l.id AND t.txn_date<=?))
+           ORDER BY l.maturity_date IS NULL,l.maturity_date,l.contract_no,l.id""",
+        (loan_id, loan_id, cutoff, cutoff),
+    ))
+    rates = rows_to_dicts(con.execute("SELECT * FROM bnr_reference_rates WHERE effective_date<=? ORDER BY effective_date,id", (cutoff,)))
+    labels = {"OPENING_BALANCE": "Sold inițial înregistrat", "ADVANCE": "Alimentare împrumut",
+              "REPAYMENT": "Rambursare principal", "INTEREST_PAYMENT": "Plată dobândă", "ADJUSTMENT": "Ajustare"}
+    for loan in loans:
+        operations = con.execute(
+            "SELECT * FROM transactions WHERE loan_id=? AND txn_date<=? ORDER BY txn_date,id",
+            (loan["id"], cutoff),
+        ).fetchall()
+        events = []
+
+        def add_event(day, order, identity, label, *, reference="", principal=0, calculated=0, recognized=0, paid=0, other=0):
+            events.append({"date": day, "order": order, "identity": identity, "label": label, "reference": reference,
+                           "principal_delta": principal, "calculated": calculated, "recognized": recognized, "paid": paid, "other": other})
+
+        for txn in operations:
+            kind = txn["txn_type"]
+            add_event(txn["txn_date"], 4 if kind == "INTEREST_PAYMENT" else 1, txn["id"], labels.get(kind, kind),
+                      reference=txn["reference"] or "", principal=signed_principal_delta(kind, txn["amount"]),
+                      paid=txn["amount"] if kind == "INTEREST_PAYMENT" else 0,
+                      other=txn["amount"] if kind not in {"ADVANCE", "OPENING_BALANCE", "REPAYMENT", "INTEREST_PAYMENT"} else 0)
+        accruals = con.execute("SELECT * FROM interest_accruals WHERE loan_id=? ORDER BY period_end,id", (loan["id"],)).fetchall()
+        for accrual in accruals:
+            period = f"{accrual['period_start']} – {accrual['period_end']}"
+            if accrual["period_end"] <= cutoff:
+                add_event(accrual["period_end"], 2, accrual["id"], "Calcul dobândă trimestrială", reference=period, calculated=accrual["calculated_amount"])
+            recognized_date = accrual["recognized_date"] or accrual["period_end"]
+            if accrual["status"] == "RECOGNIZED" and recognized_date <= cutoff:
+                add_event(recognized_date, 3, accrual["id"], "Recunoaștere dobândă", reference=period, recognized=accrual["recognized_amount"])
+        start = loan["interest_start_date"]
+        if start and start <= cutoff:
+            add_event(start, 0, 0, "Început calcul dobândă")
+            if loan["interest_rate_mode"] == "BNR_REFERENCE":
+                for rate in rates:
+                    if start < rate["effective_date"] <= cutoff:
+                        add_event(rate["effective_date"], 0, rate["id"], "Modificare rată BNR")
+        principal = recognized = paid = calculated = funded = repaid = 0.0
+        events.sort(key=lambda e: (e["date"], e["order"], e["identity"]))
+        for event in events:
+            principal += event["principal_delta"]
+            recognized += event["recognized"]
+            paid += event["paid"]
+            calculated += event["calculated"]
+            funded += max(event["principal_delta"], 0)
+            repaid += max(-event["principal_delta"], 0)
+            event["principal_balance"] = round(principal, 2)
+            event["interest_balance"] = round(recognized - paid, 2)
+            applicable = next((r for r in reversed(rates) if r["effective_date"] <= event["date"]), None)
+            event["rate"] = 0 if not start or event["date"] < start else (
+                (applicable["rate"] if applicable else None) if loan["interest_rate_mode"] == "BNR_REFERENCE" else loan["interest_rate"])
+        loan["events"] = events
+        loan.update(funded=round(funded, 2), repaid=round(repaid, 2), principal_balance=round(principal, 2), interest_calculated=round(calculated, 2),
+                    interest_recognized=round(recognized, 2), interest_paid=round(paid, 2), interest_balance=round(recognized-paid, 2))
+    totals = {key: round(sum(l[key] for l in loans), 2) for key in
+              ("funded", "repaid", "principal_balance", "interest_calculated", "interest_recognized", "interest_paid", "interest_balance")}
+    company = con.execute("SELECT * FROM company LIMIT 1").fetchone()
+    return {"as_of": cutoff, "company": dict(company) if company else {}, "loans": loans, "totals": totals}
+
+
 def csv_export(con: sqlite3.Connection, dataset: str) -> tuple[bytes, str]:
     definitions = {
         "loans": "SELECT l.*,a.name associate_name,b.funded AS funded_principal,b.repaid,b.balance FROM loans l JOIN associates a ON a.id=l.associate_id JOIN loan_balances b ON b.loan_id=l.id ORDER BY l.id",

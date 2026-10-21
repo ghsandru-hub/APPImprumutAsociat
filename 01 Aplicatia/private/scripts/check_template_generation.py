@@ -64,6 +64,8 @@ class GenerationChecks(unittest.TestCase):
             con.execute("DELETE FROM documents")
             con.execute("DELETE FROM transactions")
             con.execute("DELETE FROM interest_accruals")
+            con.execute("DELETE FROM bnr_reference_rates")
+            con.execute("INSERT INTO bnr_reference_rates(effective_date,rate) VALUES('2024-08-08',6.5)")
             con.execute("DELETE FROM loans")
             con.execute("DELETE FROM associates")
             con.execute("DELETE FROM company")
@@ -181,6 +183,88 @@ class GenerationChecks(unittest.TestCase):
                 doc = minidom.parseString(archive.read("word/document.xml"))
                 self.assertNotIn("|~", self.docx.text(doc))
                 self.assertIn("Compania QA", self.docx.text(doc))
+
+    def test_schedule_uses_cutoff_for_principal_recognition_and_gross_payments(self):
+        from datetime import date
+        from loancopilot.business import schedule_at
+        with self.db.tenant_connect(self.company) as con:
+            con.executemany("INSERT INTO transactions(loan_id,txn_date,txn_type,amount,tax_withheld) VALUES(1,?,?,?,?)", [
+                ("2026-01-01", "OPENING_BALANCE", 10000, 0),
+                ("2027-03-31", "REPAYMENT", 1000, 0),
+                ("2027-04-01", "REPAYMENT", 2000, 0),
+                ("2027-03-31", "INTEREST_PAYMENT", 30, 3),
+                ("2027-04-01", "INTEREST_PAYMENT", 20, 2),
+            ])
+            con.execute("UPDATE loans SET status='CLOSED',maturity_date='2027-03-01' WHERE id=1")
+            con.commit()
+            before = con.total_changes
+            report = schedule_at(con, date(2027, 3, 31), 1)
+            self.assertEqual(con.total_changes, before)
+            self.assertEqual(report["totals"]["funded"], 10000)
+            self.assertEqual(report["totals"]["principal_balance"], 9000)
+            self.assertEqual(report["totals"]["interest_recognized"], 100)
+            self.assertEqual(report["totals"]["interest_paid"], 30)
+            self.assertEqual(report["totals"]["interest_balance"], 70)
+            self.assertEqual(report["totals"]["interest_calculated"], 123.45)
+            events = report["loans"][0]["events"]
+            self.assertEqual(events[0]["principal_balance"], 10000)
+            self.assertEqual(events[0]["rate"], 0)
+            self.assertEqual(events[-1]["principal_balance"], 9000)
+            self.assertEqual(events[-1]["interest_balance"], 70)
+            self.assertEqual(events[-1]["rate"], 6.5)
+            self.assertEqual(events[-3]["label"], "Calcul dobândă trimestrială")
+            self.assertEqual(events[-3]["interest_balance"], 0)
+            self.assertEqual(events[-2]["interest_balance"], 100)
+            self.assertTrue(all(e["date"] <= "2027-03-31" for e in events))
+            self.assertEqual(schedule_at(con, date(2024, 1, 1))["loans"], [])
+        response = self.client.get("/reports/schedule?as_of=2027-03-31&loan_id=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        self.assertIn("Scadențar la 31.03.2027".encode(), response.data)
+        self.assertIn(b"9.000,00", response.data)
+        self.assertIn("Sold principal".encode(), response.data)
+        self.assertIn(b"window.print()", response.data)
+
+    def test_schedule_credit_validation_and_read_only_access(self):
+        from datetime import date
+        from loancopilot.business import schedule_at
+        with self.db.tenant_connect(self.company) as con:
+            con.execute("INSERT INTO transactions(loan_id,txn_date,txn_type,amount) VALUES(1,'2027-03-31','INTEREST_PAYMENT',150)")
+            con.commit()
+            report = schedule_at(con, date(2027, 3, 31), 1)
+        self.assertEqual(report["totals"]["interest_balance"], -50)
+        self.assertEqual(report["loans"][0]["events"][-1]["interest_balance"], -50)
+        self.assertEqual(self.client.get("/reports/schedule?as_of=2027-02-30").status_code, 400)
+        self.assertEqual(self.client.get("/reports/schedule?loan_id=999").status_code, 404)
+        self.assertEqual(self.client.get("/reports/schedule?loan_id=-1").status_code, 400)
+        self.client.set_cookie("loancopilot_session", "viewer-session")
+        self.assertEqual(self.client.get("/reports/schedule").status_code, 200)
+        self.client.delete_cookie("loancopilot_session")
+        response = self.client.get("/reports/schedule")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.location)
+
+    def test_schedule_tracks_rate_changes_and_separates_contract_balances(self):
+        from datetime import date
+        from loancopilot.business import schedule_at
+        with self.db.tenant_connect(self.company) as con:
+            con.execute("INSERT INTO bnr_reference_rates(effective_date,rate) VALUES('2027-02-01',7)")
+            con.execute("INSERT INTO transactions(loan_id,txn_date,txn_type,amount) VALUES(1,'2027-01-01','ADVANCE',1000)")
+            con.execute("INSERT INTO transactions(loan_id,txn_date,txn_type,amount) VALUES(2,'2027-01-02','ADVANCE',2000)")
+            con.commit()
+            report = schedule_at(con, date(2027, 2, 10))
+            self.assertEqual(report["totals"]["principal_balance"], 3000)
+            self.assertEqual(report["loans"][0]["events"][-1]["principal_balance"], 1000)
+            self.assertEqual(report["loans"][1]["events"][-1]["principal_balance"], 2000)
+            self.assertEqual(report["loans"][0]["events"][-1]["rate"], 7)
+            self.assertEqual(report["loans"][0]["events"][-1]["label"], "Modificare rată BNR")
+            self.assertEqual(report["loans"][0]["events"][-2]["rate"], 6.5)
+            self.assertEqual(report["totals"]["interest_calculated"], 0)
+            con.execute("UPDATE loans SET interest_rate_mode='FIXED',interest_rate=5 WHERE id=1")
+            con.commit()
+            fixed = schedule_at(con, date(2027, 2, 10), 1)
+            self.assertEqual(fixed["loans"][0]["events"][-1]["rate"], 5)
+            self.assertNotIn("Modificare rată BNR", [e["label"] for e in fixed["loans"][0]["events"]])
 
 
 if __name__ == "__main__":
