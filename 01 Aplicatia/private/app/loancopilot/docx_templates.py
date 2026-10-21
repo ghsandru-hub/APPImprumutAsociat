@@ -146,7 +146,7 @@ def interest_table(doc, rows):
                  values, [1450, 2200, 1150, 1150, 1150, 1150])
 
 
-def prepare_interest_sheet(doc, rows, segments, values):
+def prepare_interest_sheet(doc, rows, segments, values, *, company_in_header=False):
     """The shipped legacy sheet has fixed 2026 examples; replace those with selected data."""
     body = doc.getElementsByTagNameNS(W, "body")[0]
     children = [n for n in body.childNodes if n.nodeType == n.ELEMENT_NODE]
@@ -157,7 +157,8 @@ def prepare_interest_sheet(doc, rows, segments, values):
     for n in list(body.childNodes):
         body.removeChild(n)
     body.appendChild(paragraph(doc, "FIȘĂ DE CALCUL A DOBÂNZII ȘI NOTĂ CONTABILĂ", title))
-    body.appendChild(paragraph(doc, f"{values.get('CompanieNume', '')} · CUI {values.get('CompanieCUI', '')}"))
+    if not company_in_header:
+        body.appendChild(paragraph(doc, f"{values.get('CompanieNume', '')} · CUI {values.get('CompanieCUI', '')}"))
     body.appendChild(paragraph(doc, f"Nr. {values.get('DocumentNumar', '')} din {values.get('DataCalcul', '')}"))
     body.appendChild(paragraph(doc, "1. Dobânzi trimestriale selectate", heading))
     body.appendChild(interest_table(doc, rows))
@@ -181,7 +182,6 @@ def prepare_interest_sheet(doc, rows, segments, values):
         body.appendChild(signature.cloneNode(True))
     else:
         body.appendChild(paragraph(doc, "ÎNTOCMIT: ____________________     VERIFICAT / APROBAT: ____________________"))
-        body.appendChild(paragraph(doc, f"Data: {values.get('DataCalcul', '')}"))
     if section:
         body.appendChild(section.cloneNode(True))
 
@@ -190,12 +190,16 @@ def generate(source: Path, values: dict, rows: list[dict], segments: list[dict])
     output = io.BytesIO()
     with zipfile.ZipFile(source) as archive, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as result:
         xml_parts = set(parts(archive))
+        company_in_header = any(
+            "|~CompanieNume~|" in header and "|~CompanieCUI~|" in header
+            for header in (text(minidom.parseString(archive.read(name))) for name in xml_parts if name.startswith("word/header"))
+        )
         for info in archive.infolist():
             content = archive.read(info.filename)
             if info.filename in xml_parts:
                 doc = minidom.parseString(content)
                 if info.filename == "word/document.xml" and source.name == INTEREST_TEMPLATE:
-                    prepare_interest_sheet(doc, rows, segments, values)
+                    prepare_interest_sheet(doc, rows, segments, values, company_in_header=company_in_header)
                 for p in list(doc.getElementsByTagNameNS(W, "p")):
                     if "|~DobanziTrimestriale~|" in text(p):
                         if text(p).strip() != "|~DobanziTrimestriale~|" or p.parentNode.localName != "body":

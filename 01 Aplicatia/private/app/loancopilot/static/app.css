@@ -741,6 +741,28 @@ footer {
   box-shadow: 0 28px 70px rgba(0, 0, 0, .3);
 }
 
+.btn.action-icon {
+  font-size: 0;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn.action-icon::before {
+  content: attr(data-icon);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.btn.small.action-icon {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 6px;
+}
+
 .row-select {
   width: 17px;
   height: 17px;

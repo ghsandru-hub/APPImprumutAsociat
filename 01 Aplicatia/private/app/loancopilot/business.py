@@ -543,10 +543,12 @@ def schedule_at(con: sqlite3.Connection, as_of: date, loan_id: int | None = None
         accruals = con.execute("SELECT * FROM interest_accruals WHERE loan_id=? ORDER BY period_end,id", (loan["id"],)).fetchall()
         for accrual in accruals:
             period = f"{accrual['period_start']} – {accrual['period_end']}"
-            if accrual["period_end"] <= cutoff:
-                add_event(accrual["period_end"], 2, accrual["id"], "Calcul dobândă trimestrială", reference=period, calculated=accrual["calculated_amount"])
             recognized_date = accrual["recognized_date"] or accrual["period_end"]
-            if accrual["status"] == "RECOGNIZED" and recognized_date <= cutoff:
+            same_day = accrual["status"] == "RECOGNIZED" and recognized_date == accrual["period_end"]
+            if accrual["period_end"] <= cutoff:
+                add_event(accrual["period_end"], 2, accrual["id"], "Dobândă trimestrială" if same_day else "Calcul dobândă trimestrială",
+                          reference=period, calculated=accrual["calculated_amount"], recognized=accrual["recognized_amount"] if same_day else 0)
+            if accrual["status"] == "RECOGNIZED" and recognized_date <= cutoff and not same_day:
                 add_event(recognized_date, 3, accrual["id"], "Recunoaștere dobândă", reference=period, recognized=accrual["recognized_amount"])
         start = loan["interest_start_date"]
         if start and start <= cutoff:

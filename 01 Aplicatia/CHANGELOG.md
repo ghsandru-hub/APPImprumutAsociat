@@ -1,3 +1,8 @@
+## 2.6.6
+
+- Acțiunile din paginile principale, tabele și scadențar folosesc iconuri, cu explicații la hover și etichete accesibile. Etichetele câmpurilor, navigarea și confirmările formularelor rămân explicite.
+- Scadențarul evită sumarizările repetate și unește calculul și recunoașterea din aceeași zi pe o singură linie, cu sumele în coloane distincte. Fișa Word nu repetă datele companiei deja prezente în antet.
+
 ## 2.6.5
 
 - Selector Portrait / Landscape în scadențar; orientarea se aplică imediat previzualizării și tipăririi / Save as PDF și se păstrează la actualizarea raportului.
