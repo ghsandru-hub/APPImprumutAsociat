@@ -743,9 +743,14 @@ footer {
 
 .btn.action-icon {
   font-size: 0;
+  width: 36px;
+  height: 36px;
   min-width: 36px;
   min-height: 36px;
-  padding: 8px;
+  padding: 0;
+  gap: 0;
+  line-height: 0;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -758,9 +763,11 @@ footer {
 }
 
 .btn.small.action-icon {
+  width: 30px;
+  height: 30px;
   min-width: 30px;
   min-height: 30px;
-  padding: 6px;
+  padding: 0;
 }
 
 .row-select {

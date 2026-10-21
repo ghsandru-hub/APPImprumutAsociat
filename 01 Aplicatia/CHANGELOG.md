@@ -1,3 +1,7 @@
+## 2.6.7
+
+- Iconurile acțiunilor sunt centrate în butoane pătrate, fără spațiul etichetei ascunse.
+
 ## 2.6.6
 
 - Acțiunile din paginile principale, tabele și scadențar folosesc iconuri, cu explicații la hover și etichete accesibile. Etichetele câmpurilor, navigarea și confirmările formularelor rămân explicite.
