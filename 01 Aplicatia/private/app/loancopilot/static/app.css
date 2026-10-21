@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #f3f5f7;
   --panel: #fff;
   --panel2: #f8f9fb;
@@ -19,6 +20,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #101419;
   --panel: #171d23;
   --panel2: #1d252d;
@@ -577,11 +579,10 @@ main {
   font-weight: 700;
 }
 
-.field input,
-.field select,
-.field textarea {
-  width: 100%;
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="range"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]), select, textarea) {
   min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
   padding: 8px 10px;
   background: var(--panel2);
   border: 1px solid var(--line);
@@ -589,11 +590,32 @@ main {
   outline: none;
 }
 
-.field input:focus,
-.field select:focus,
-.field textarea:focus {
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea):focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+input::file-selector-button {
+  margin-right: 10px;
+  padding: 4px 9px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
 }
 
 .field textarea {

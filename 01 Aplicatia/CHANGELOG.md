@@ -1,5 +1,7 @@
 ## 2.6.7
 
+- Câmpurile de input și selectoarele folosesc stilul aplicației inclusiv în tabele și filtre, cu suport light/dark pentru controalele native.
+
 - Iconurile acțiunilor sunt centrate în butoane pătrate, fără spațiul etichetei ascunse.
 
 ## 2.6.6
