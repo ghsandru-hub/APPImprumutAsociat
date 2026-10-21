@@ -796,6 +796,7 @@ function makePage(isFirst){{
   const footer=document.createElement('footer'); footer.className='word-page-footer';
   footer.innerHTML=`<span>${{WORD_FILENAME}}</span><span class="page-label"></span>`;
   page.append(header,body,footer); document.getElementById('wordPages').append(page);
+  body.style.top=Math.max(body.offsetTop,header.offsetTop+header.offsetHeight+8)+'px';
   return {{page,body,footer}};
 }}
 function overflows(body){{return body.scrollHeight>body.clientHeight+1}}

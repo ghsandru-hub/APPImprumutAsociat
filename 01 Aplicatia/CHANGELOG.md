@@ -1,3 +1,8 @@
+## 2.6.13
+
+- Registrul afișează starea PDF fără buton redundant; tipărirea/PDF are o singură acțiune în meniu. Încărcarea PDF-ului semnat are icon distinct.
+- Corpul paginii păstrează distanță față de înălțimea reală a antetului.
+
 ## 2.6.12
 
 - Antetul de tipărire afișează compania pe primul rând și datele fiscale pe al doilea, cu font mărit cu 2 pt.
