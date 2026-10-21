@@ -1,3 +1,7 @@
+## 2.6.15
+
+- Paragrafele goale de la sfârșitul antetului nu adaugă spațiere suplimentară peste distanța configurată.
+
 ## 2.6.14
 
 - Spațiul după antet este de 1,5 rânduri pe prima pagină și un rând pe paginile următoare, în funcție de înălțimea de rând a documentului.

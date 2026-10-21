@@ -691,8 +691,11 @@ class DocxPrintRenderer:
                     details.text = "CUI" + after
                     run.insert(index + 2, details)
                     split = True
+        children = list(root)
+        while children and children[-1].tag == w("p") and not "".join(children[-1].itertext()).strip() and children[-1].find(".//w:pBdr", NS) is None and children[-1].find(".//w:drawing", NS) is None:
+            children.pop()
         rels, base_dir = self._part_rels(target)
-        blocks = self._render_blocks(list(root), rels, base_dir, allow_page_breaks=False)[0]
+        blocks = self._render_blocks(children, rels, base_dir, allow_page_breaks=False)[0]
         return "".join(blocks)
 
     def _body_pages(self) -> list[list[str]]:

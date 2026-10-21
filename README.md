@@ -1,6 +1,6 @@
 # APPImprumutAsociat
 
-Codul aplicației LoanCopilot 2.6.14, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
+Codul aplicației LoanCopilot 2.6.15, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
 
 Versiunea 2.6.5 permite alegerea orientării Portrait / Landscape direct în scadențar, pentru previzualizare și tipărire / Save as PDF.
 
