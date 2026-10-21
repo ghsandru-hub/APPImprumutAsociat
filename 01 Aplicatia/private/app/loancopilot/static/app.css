@@ -199,9 +199,12 @@ header {
 }
 
 .company-switch {
-  width: min(270px, 24vw);
-  max-width: 270px;
-  padding: 7px 9px;
+  width: min(420px, 100%);
+  max-width: 100%;
+  min-height: 30px;
+  padding: 3px 8px;
+  margin-bottom: 2px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   background: var(--panel2);

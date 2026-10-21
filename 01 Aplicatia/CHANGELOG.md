@@ -1,3 +1,7 @@
+## 2.6.17
+
+- Selectorul companiei este deasupra CUI și numărului de Registru Comerț în același bloc al antetului.
+
 ## 2.6.16
 
 - Denumirea companiei apare o singură dată în antetul aplicației, în selector; datele fiscale rămân vizibile separat.
