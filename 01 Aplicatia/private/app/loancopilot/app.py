@@ -4,11 +4,13 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import shutil
 import sqlite3
 import zipfile
 from xml.etree import ElementTree as ET
+from xml.parsers.expat import ExpatError
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -21,6 +23,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from . import business
+from . import docx_templates
 from .anaf import AnafLookupError, lookup_company, normalize_cui
 from .docx_print import render_docx_for_print
 from .config import (
@@ -1080,14 +1083,56 @@ def create_app() -> Flask:
             row = con.execute("SELECT * FROM interest_accruals WHERE id=?", (int(data["id"]),)).fetchone()
             if not row:
                 return json_error("Calcul inexistent.", 404)
-            amount = round(float(data.get("recognized_amount", row["calculated_amount"])), 2)
+            try:
+                amount = round(float(data.get("recognized_amount", row["calculated_amount"])), 2)
+                recognized_date = date.fromisoformat(data.get("recognized_date") or row["period_end"]).isoformat()
+            except (TypeError, ValueError):
+                return json_error("Suma sau data recunoașterii este invalidă.")
+            paid = con.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE accrual_id=? AND txn_type='INTEREST_PAYMENT'", (row["id"],)).fetchone()[0]
+            if not math.isfinite(amount) or amount < 0 or amount < round(paid, 2):
+                return json_error("Dobânda recunoscută trebuie să fie pozitivă sau zero și cel puțin egală cu dobânda deja plătită.")
             con.execute(
                 "UPDATE interest_accruals SET recognized_amount=?,recognized_date=?,status='RECOGNIZED' WHERE id=?",
-                (amount, data.get("recognized_date") or row["period_end"], row["id"]),
+                (amount, recognized_date, row["id"]),
             )
-            business.audit(con, "RECOGNIZE", "interest_accruals", entity_id=row["id"], details=f"{amount:.2f}", user_email=g.user["email"])
+            business.audit(con, "RECOGNIZE", "interest_accruals", entity_id=row["id"], details=f"{row['recognized_amount']:.2f} -> {amount:.2f}; data={recognized_date}", user_email=g.user["email"])
             con.commit()
         return jsonify(ok=True)
+
+    def selected_interest_ids(data):
+        ids = data.get("interest_ids", [])
+        if not isinstance(ids, list) or len(ids) > 500 or any(type(i) is not int or i <= 0 for i in ids):
+            raise ValueError("Selectați maximum 500 de linii de dobândă valide.")
+        return list(dict.fromkeys(ids))
+
+    @app.post("/api/interest/recognize-selected")
+    @role_required("EDITOR")
+    def api_recognize_selected_interest():
+        try:
+            ids = selected_interest_ids(payload())
+        except ValueError as exc:
+            return json_error(str(exc))
+        if not ids:
+            return json_error("Selectați liniile de dobândă care se preiau.")
+        with tenant() as con:
+            con.execute("BEGIN IMMEDIATE")
+            marks = ",".join("?" for _ in ids)
+            rows = con.execute(f"SELECT * FROM interest_accruals WHERE id IN ({marks})", ids).fetchall()
+            if len(rows) != len(ids):
+                return json_error("Unele calcule nu mai există. Reîncărcați tabelul.")
+            for row in rows:
+                paid = con.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE accrual_id=? AND txn_type='INTEREST_PAYMENT'", (row["id"],)).fetchone()[0]
+                amount = round(row["calculated_amount"], 2)
+                if not math.isfinite(amount) or amount < 0 or amount < round(paid, 2):
+                    return json_error(f"Calculul {row['id']} nu poate fi preluat: suma calculată este invalidă sau mai mică decât dobânda plătită. Nicio linie nu a fost modificată.")
+            for row in rows:
+                amount = round(row["calculated_amount"], 2)
+                con.execute("UPDATE interest_accruals SET recognized_amount=?,recognized_date=?,status='RECOGNIZED' WHERE id=?",
+                            (amount, row["recognized_date"] or row["period_end"], row["id"]))
+                business.audit(con, "RECOGNIZE", "interest_accruals", entity_id=row["id"],
+                               details=f"Preluare calculată: {row['recognized_amount']:.2f} -> {amount:.2f}", user_email=g.user["email"])
+            con.commit()
+        return jsonify(ok=True, periods=len(rows))
 
     @app.get("/api/bnr-rates")
     @company_required
@@ -1284,6 +1329,131 @@ def create_app() -> Flask:
             business.audit(con, "COPY_TEMPLATE", "templates", details=f"source={filename}; target={relative_path}", user_email=g.user["email"])
             con.commit()
         return jsonify(ok=True, copied=True, filename=destination.name, relative_path=relative_path)
+
+    def document_template_context(data, con):
+        source = resolve_template_path(str(data.get("template_path") or ""))
+        if not source.is_file() or source.suffix.lower() != ".docx":
+            raise ValueError("Selectați un șablon Word DOCX existent.")
+        ids = selected_interest_ids(data)
+        rows = []
+        segments = []
+        if ids:
+            marks = ",".join("?" for _ in ids)
+            rows = business.rows_to_dicts(con.execute(
+                f"""SELECT ia.*,l.contract_no,a.name associate_name FROM interest_accruals ia
+                    JOIN loans l ON l.id=ia.loan_id JOIN associates a ON a.id=l.associate_id
+                    WHERE ia.id IN ({marks}) ORDER BY ia.period_start,ia.loan_id""", ids).fetchall())
+            if len(rows) != len(ids):
+                raise ValueError("Unele linii selectate nu mai există. Reîncărcați dobânzile.")
+            segments = business.rows_to_dicts(con.execute(
+                f"""SELECT s.*,l.contract_no,a.name associate_name FROM interest_segments s
+                    JOIN interest_accruals ia ON ia.id=s.accrual_id JOIN loans l ON l.id=ia.loan_id
+                    JOIN associates a ON a.id=l.associate_id WHERE ia.id IN ({marks})
+                    ORDER BY ia.period_start,ia.loan_id,s.segment_start""", ids).fetchall())
+        names = docx_templates.fields(source)
+        if source.name == docx_templates.INTEREST_TEMPLATE:
+            names = ["CompanieNume", "CompanieCUI", "DocumentNumar", "DataCalcul"]
+        if (source.name == docx_templates.INTEREST_TEMPLATE or "DobanziTrimestriale" in names) and not rows:
+            raise ValueError("Selectați cel puțin o linie din Dobânzi trimestriale pentru fișa de calcul.")
+        loan_ids = {r["loan_id"] for r in rows}
+        loan_id = int(data.get("loan_id") or (next(iter(loan_ids)) if len(loan_ids) == 1 else 0)) or None
+        loan = con.execute("SELECT * FROM loans WHERE id=?", (loan_id,)).fetchone() if loan_id else None
+        if loan_id and not loan:
+            raise ValueError("Contractul selectat nu există în compania curentă.")
+        if loan_id and loan_ids and loan_ids != {loan_id}:
+            raise ValueError("Liniile de dobândă trebuie să aparțină contractului selectat sau alegeți «General / mai multe contracte».")
+        company = dict(con.execute("SELECT * FROM company LIMIT 1").fetchone())
+        associates = business.rows_to_dicts(con.execute("SELECT * FROM associates ORDER BY id").fetchall())
+        values = {"CompanieNume": company["name"], "CompanieCUI": company["cui"],
+                  "CompanieNrRC": company.get("reg_com") or "", "CompanieAdresa": company.get("address") or "",
+                  "CompanieSediu": company.get("address") or "", "AdministratorNume": company.get("administrator") or "",
+                  "ReprezentantSocietate": company.get("administrator") or "",
+                  "DataCalcul": docx_templates.day(data.get("doc_date") or date.today().isoformat()),
+                  "DocumentNumar": str(data.get("doc_no") or "")}
+        for index, associate in enumerate(associates[:2], 1):
+            for field, column in (("Nume", "name"), ("CNP", "cnp"), ("Adresa", "address"), ("ActIdentitate", "id_doc"), ("Cota", "share_pct")):
+                value = associate.get(column)
+                values[f"Asociat{index}{field}"] = docx_templates.number(value) if column == "share_pct" else value or ""
+        if loan:
+            associate = next((a for a in associates if a["id"] == loan["associate_id"]), {})
+            values.update({"ContractNumar": loan["contract_no"], "DataSemnareContract": docx_templates.day(loan["original_contract_date"]),
+                           "DataEfecteContract": docx_templates.day(loan["contract_date"]),
+                           "DataScadentaFinala": docx_templates.day(loan["maturity_date"]),
+                           "DataEfecteDobanda": docx_templates.day(loan["interest_start_date"]),
+                           "DataInceputDobanda": docx_templates.day(loan["interest_start_date"]),
+                           "CotaAlocare": docx_templates.number(associate.get("share_pct"))})
+            for field, column in (("Nume", "name"), ("CNP", "cnp"), ("Adresa", "address"), ("ActIdentitate", "id_doc")):
+                values["Asociat" + field] = associate.get(column) or ""
+        for index, contract in enumerate(con.execute("SELECT contract_no FROM loans ORDER BY id LIMIT 2"), 1):
+            values[f"Contract{index}Numar"] = contract["contract_no"]
+        return source, names, values, rows, segments, loan
+
+    @app.post("/api/documents/template-context")
+    @role_required("EDITOR")
+    def api_document_template_context():
+        try:
+            with tenant() as con:
+                source, names, values, rows, _, _ = document_template_context(payload(), con)
+            return jsonify(ok=True, fields=[{"name": n, "value": values.get(n, "")} for n in names if n != "DobanziTrimestriale"],
+                           interest_count=len(rows), calculated_total=round(sum(r["calculated_amount"] for r in rows), 2),
+                           recognized_total=round(sum(r["recognized_amount"] for r in rows), 2))
+        except (ValueError, TypeError, zipfile.BadZipFile, ExpatError) as exc:
+            return json_error(str(exc))
+
+    @app.post("/api/documents/generate")
+    @role_required("EDITOR")
+    def api_generate_document():
+        data = payload()
+        created = None
+        try:
+            doc_date = date.fromisoformat(data.get("doc_date") or date.today().isoformat()).isoformat()
+            doc_no = str(data.get("doc_no") or "").strip()
+            if not doc_no:
+                return json_error("Introduceți numărul documentului.")
+            with tenant() as con:
+                con.execute("BEGIN IMMEDIATE")
+                source, names, values, rows, segments, loan = document_template_context({**data, "doc_date": doc_date}, con)
+                overrides = data.get("fields", {})
+                if not isinstance(overrides, dict) or any(not isinstance(v, str) or len(v) > 5000 for v in overrides.values()):
+                    return json_error("Câmpurile documentului sunt invalide.")
+                values.update({k: v.strip() for k, v in overrides.items() if k in names})
+                missing = [n for n in names if n != "DobanziTrimestriale" and not str(values.get(n, "")).strip()]
+                if missing:
+                    return json_error("Completați câmpurile: " + ", ".join(missing))
+                content = docx_templates.generate(source, values, rows, segments)
+                digest = hashlib.sha256(content).hexdigest()
+                root = tenant_documents_path(g.company).resolve()
+                destination = root / "word" / ("generat_" + random_token(12))
+                destination.mkdir(parents=True, exist_ok=False)
+                filename = f"{secure_filename(doc_no) or 'document'}_{source.name}"
+                created = destination / filename
+                created.write_bytes(content)
+                relative = created.relative_to(root).as_posix()
+                provenance = json.dumps({"template": data["template_path"], "interest_ids": [r["id"] for r in rows],
+                                         "calculated_total": round(sum(r["calculated_amount"] for r in rows), 2),
+                                         "recognized_total": round(sum(r["recognized_amount"] for r in rows), 2)}, ensure_ascii=False)
+                cur = con.execute("""INSERT INTO documents(doc_type,doc_no,doc_date,associate_id,loan_id,filename,status,notes)
+                                     VALUES(?,?,?,?,?,?,'READY_FOR_SIGNATURE',?)""",
+                                  (str(data.get("doc_type") or source.stem)[:250], doc_no, doc_date,
+                                   loan["associate_id"] if loan else None, loan["id"] if loan else None, relative, provenance))
+                item_id = cur.lastrowid
+                con.execute("""INSERT INTO document_word_versions(document_id,version_no,stored_path,original_filename,mime_type,size_bytes,sha256,notes,is_current,uploaded_by)
+                               VALUES(?,1,?,?,?,?,?,?,1,?)""",
+                            (item_id, relative, filename, DOCX_MIME, len(content), digest, provenance, g.user["email"]))
+                business.audit(con, "GENERATE_DOCUMENT", "documents", entity_id=item_id, details=provenance + "; sha256=" + digest, user_email=g.user["email"])
+                con.commit()
+            return jsonify(ok=True, id=item_id, filename=filename, download_url=url_for("download_document", item_id=item_id),
+                           print_url=url_for("print_document_word", item_id=item_id))
+        except (ValueError, TypeError, zipfile.BadZipFile, ExpatError) as exc:
+            if created:
+                created.unlink(missing_ok=True)
+                created.parent.rmdir()
+            return json_error(str(exc))
+        except Exception:
+            if created:
+                created.unlink(missing_ok=True)
+                created.parent.rmdir()
+            raise
 
     @app.get("/api/documents")
     @company_required

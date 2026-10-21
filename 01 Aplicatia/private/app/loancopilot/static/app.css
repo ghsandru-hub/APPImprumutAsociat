@@ -741,6 +741,13 @@ footer {
   box-shadow: 0 28px 70px rgba(0, 0, 0, .3);
 }
 
+.row-select {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .modal.wide {
   width: min(1180px, 100%);
 }

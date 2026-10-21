@@ -1,3 +1,10 @@
+## 2.6.3
+
+- Dobânzi trimestriale: selecție de linii și preluare calculată → recunoscută, inclusiv actualizarea valorilor deja recunoscute, cu protecția sumelor plătite și audit.
+- Generare Word din șabloanele existente, cu preluarea datelor companiei și contractului și completarea câmpurilor lipsă.
+- Fișa de calcul folosește trimestrele și subperioadele selectate, fără date fixe pentru T1–T2 2026; documentul este salvat în registru și în istoricul Word.
+- Șapte verificări de integrare pe baze temporare, fără acces la datele de producție.
+
 ## 2.6.2
 
 - Administrare acces: schimbarea parolei proprii și resetarea parolelor de către superadministrator, cu confirmare, audit și revocarea sesiunilor.

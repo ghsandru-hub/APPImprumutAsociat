@@ -1,6 +1,8 @@
 # APPImprumutAsociat
 
-Codul aplicației LoanCopilot 2.6.2, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
+Codul aplicației LoanCopilot 2.6.3, configurația Passenger și șabloanele standard se află în `01 Aplicatia`.
+
+Versiunea 2.6.3 permite preluarea dobânzii calculate în cea recunoscută pentru liniile selectate, inclusiv actualizarea celor deja recunoscute. Recalcularea rămâne separată de recunoaștere. Din „Dobânzi trimestriale”, „Șabloane” sau „Documente” se pot genera documente Word completate cu datele companiei și contractului. Fișa standard de calcul folosește liniile trimestriale și subperioadele selectate, iar documentul este salvat în registru și în istoricul Word. Pentru șabloane proprii, marcajul `|~DobanziTrimestriale~|` se pune singur într-un paragraf din corpul documentului.
 
 Instrucțiuni de deploy: [README_DEPLOY.md](01%20Aplicatia/README_DEPLOY.md).
 

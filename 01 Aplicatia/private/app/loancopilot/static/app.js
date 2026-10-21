@@ -1,5 +1,5 @@
 'use strict';
-const state={company:null,loans:[],associates:[],dashboard:null,bnrRates:[],documents:[],templates:[]};
+const state={company:null,loans:[],associates:[],dashboard:null,bnrRates:[],documents:[],templates:[],interest:[],selectedInterest:new Set(),generatorInterestIds:[],generatorRevision:0};
 const canEdit=document.body.dataset.canEdit==='1';
 const canAdminCompany=document.body.dataset.canAdminCompany==='1';
 const ui=Object.freeze({
@@ -206,9 +206,33 @@ async function loadTransactions(){const t=txFilter.value?`?type=${encodeURICompo
 function openTransaction(type='REPAYMENT',loanId){txForm.reset();txType.value=type;txDate.value=new Date().toISOString().slice(0,10);txTax.value='0';if(loanId)txLoan.value=String(loanId);txModalTitle.textContent=type==='REPAYMENT'?'Rambursare principal':type==='ADVANCE'?'Alimentare împrumut':'Plată dobândă';openModal('txModal')}
 async function saveTransaction(e){e.preventDefault();try{await api('/api/transactions',{method:'POST',body:JSON.stringify({loan_id:Number(txLoan.value),txn_date:txDate.value,txn_type:txType.value,amount:Number(txAmount.value),tax_withheld:Number(txTax.value||0),payment_method:'BANK',reference:txReference.value,notes:txNotes.value})});closeModal('txModal');await refreshAll();await loadTransactions();await loadInterest();toast('Operațiunea a fost salvată')}catch(x){toast(x.message,true)}}
 async function deleteTransaction(id){if(!confirm('Ștergi această operațiune? Soldurile și dobânda vor trebui recalculate.'))return;try{await api('/api/transactions/'+id,{method:'DELETE'});await refreshAll();await loadTransactions();toast('Operațiune ștearsă')}catch(e){toast(e.message,true)}}
-async function loadInterest(){const d=await api('/api/interest');interestBody.innerHTML=d.items.length?d.items.map(r=>`<tr><td>${esc(r.period_start)}<br><span class="muted">– ${esc(r.period_end)}</span></td><td>${esc(r.contract_no)}<br><span class="muted">${esc(r.associate_name)}</span></td><td class="num">${money(r.opening_balance)}</td><td class="num">${money(r.principal_repayments)}</td><td class="num">${money(r.closing_balance)}</td><td class="num">${r.days}</td><td>${esc(r.rate_summary||'—')}<br><button class="btn small" onclick="showInterestSegments(${r.id})">Detalii</button></td><td class="num"><b>${money(r.calculated_amount)}</b></td><td class="num">${money(r.recognized_amount)}</td><td><span class="pill ${r.status==='RECOGNIZED'?'ok':'warn'}">${esc(r.status)}</span></td><td>${r.status==='RECOGNIZED'?'':`<button class="btn small primary" onclick="recognizeInterest(${r.id},${r.calculated_amount},'${r.period_end}')">Recunoaște</button>`}</td></tr>`).join(''):'<tr><td colspan="11" class="empty">Nu există perioade calculate.</td></tr>'}
+async function loadInterest(){
+  const d=await api('/api/interest');state.interest=d.items;
+  const available=new Set(d.items.map(r=>r.id));
+  state.selectedInterest=new Set([...state.selectedInterest].filter(id=>available.has(id)));
+  interestBody.innerHTML=d.items.length?d.items.map(r=>{
+    const changed=Math.abs(Number(r.calculated_amount)-Number(r.recognized_amount))>=0.005;
+    const action=canEdit&&(r.status!=='RECOGNIZED'||changed)?`<button class="btn small primary" onclick="recognizeInterest(${r.id},${r.calculated_amount},'${r.recognized_date||r.period_end}')">${r.status==='RECOGNIZED'?'Actualizează recunoscută':'Recunoaște'}</button>`:'';
+    return `<tr><td>${canEdit?`<input class="row-select" type="checkbox" aria-label="Selectează ${esc(r.contract_no)} ${esc(r.period_start)}" ${state.selectedInterest.has(r.id)?'checked':''} onchange="toggleInterestSelection(${r.id},this.checked)">`:''}</td><td>${esc(r.period_start)}<br><span class="muted">– ${esc(r.period_end)}</span></td><td>${esc(r.contract_no)}<br><span class="muted">${esc(r.associate_name)}</span></td><td class="num">${money(r.opening_balance)}</td><td class="num">${money(r.principal_repayments)}</td><td class="num">${money(r.closing_balance)}</td><td class="num">${r.days}</td><td>${esc(r.rate_summary||'—')}<br><button class="btn small" onclick="showInterestSegments(${r.id})">Detalii</button></td><td class="num"><b>${money(r.calculated_amount)}</b></td><td class="num">${money(r.recognized_amount)}${r.recognized_date?`<div class="muted">${esc(r.recognized_date)}</div>`:''}</td><td><span class="pill ${r.status==='RECOGNIZED'?'ok':'warn'}">${esc(r.status)}</span></td><td>${action}</td></tr>`;
+  }).join(''):'<tr><td colspan="12" class="empty">Nu există perioade calculate.</td></tr>';
+  updateInterestSelection();
+}
+function toggleInterestSelection(id,checked){if(checked)state.selectedInterest.add(id);else state.selectedInterest.delete(id);updateInterestSelection()}
+function selectAllInterest(checked){state.selectedInterest=checked?new Set(state.interest.map(r=>r.id)):new Set();interestBody.querySelectorAll('input.row-select').forEach(c=>c.checked=checked);updateInterestSelection()}
+function updateInterestSelection(){
+  const rows=state.interest.filter(r=>state.selectedInterest.has(r.id));
+  document.getElementById('interestSelectionSummary').textContent=rows.length?`${rows.length} linii selectate · calculată ${money(rows.reduce((s,r)=>s+Number(r.calculated_amount),0))} · recunoscută ${money(rows.reduce((s,r)=>s+Number(r.recognized_amount),0))}`:'Selectați liniile pentru preluare sau generarea fișei.';
+  const all=document.getElementById('interestSelectAll');if(all){all.checked=rows.length>0&&rows.length===state.interest.length;all.indeterminate=rows.length>0&&rows.length<state.interest.length}
+  for(const id of ['recognizeSelectedButton','generateInterestButton']){const b=document.getElementById(id);if(b)b.disabled=!rows.length}
+}
+async function recognizeSelectedInterest(){
+  const rows=state.interest.filter(r=>state.selectedInterest.has(r.id));
+  if(!rows.length||!confirm(`Preiei dobânda calculată în cea recunoscută pentru ${rows.length} linii (${money(rows.reduce((s,r)=>s+Number(r.calculated_amount),0))})? Valorile recunoscute existente ale selecției vor fi actualizate.`))return;
+  const button=document.getElementById('recognizeSelectedButton');button.disabled=true;
+  try{const d=await api('/api/interest/recognize-selected',{method:'POST',body:JSON.stringify({interest_ids:rows.map(r=>r.id)})});await Promise.all([loadInterest(),loadDashboard(),loadLoans()]);toast(`${d.periods} linii preluate în dobânda recunoscută`)}catch(e){toast(e.message,true)}finally{updateInterestSelection()}
+}
 async function recalculateInterest(){try{const d=await api('/api/interest/recalculate',{method:'POST',body:'{}'});await loadInterest();await loadDashboard();toast(`${d.periods} perioade recalculate`)}catch(e){toast(e.message,true)}}
-async function recognizeInterest(id,amount,day){if(!confirm(`Recunoști dobânda de ${money(amount)} la ${day}?`))return;try{await api('/api/interest/recognize',{method:'POST',body:JSON.stringify({id,recognized_amount:amount,recognized_date:day})});await loadInterest();await loadDashboard();toast('Dobândă recunoscută')}catch(e){toast(e.message,true)}}
+async function recognizeInterest(id,amount,day){if(!confirm(`Preiei dobânda calculată de ${money(amount)} în cea recunoscută la ${day}?`))return;try{await api('/api/interest/recognize',{method:'POST',body:JSON.stringify({id,recognized_amount:amount,recognized_date:day})});await Promise.all([loadInterest(),loadDashboard(),loadLoans()]);toast('Dobândă recunoscută actualizată')}catch(e){toast(e.message,true)}}
 async function loadBnrRates(){const d=await api('/api/bnr-rates');state.bnrRates=d.items;const current=d.items[0];bnrCurrentRate.textContent=current?fmt.format(current.rate)+'%':'—';bnrCurrentDate.textContent=current?'valabilă din '+current.effective_date:'Nu există rată înregistrată';bnrRatesBody.innerHTML=d.items.length?d.items.map(r=>`<tr><td><b>${esc(r.effective_date)}</b></td><td class="num"><b>${fmt.format(r.rate)}%</b></td><td><span class="pill ${r.entry_mode==='MANUAL'?'warn':'ok'}">${esc(r.entry_mode)}</span></td><td>${r.source_url?`<a href="${esc(r.source_url)}" target="_blank" rel="noopener">Sursa BNR</a>`:'—'}<div class="muted">${esc(r.source_document||'')}</div></td><td>${esc(r.fetched_at||'—')}</td><td>${esc(r.notes||'')}</td><td><button class="btn small danger" onclick="deleteBnrRate(${r.id})">Șterge</button></td></tr>`).join(''):'<tr><td colspan="7" class="empty">Nu există rate BNR înregistrate.</td></tr>'}
 async function updateBnrRate(){const b=document.getElementById('bnrUpdateBtn');b.disabled=true;b.textContent='Se actualizează…';try{const d=await api('/api/bnr-rates/update',{method:'POST',body:'{}'});await Promise.all([loadBnrRates(),loadInterest(),loadDashboard(),loadLoans()]);toast(`Rata BNR ${fmt.format(d.item.rate)}% a fost actualizată; ${d.periods} perioade recalculate`)}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='↻ Actualizează din BNR'}}
 function openBnrRateModal(){bnrEffectiveDate.value=new Date().toISOString().slice(0,10);bnrRateValue.value=state.bnrRates[0]?.rate??'';bnrNotes.value='';openModal('bnrRateModal')}
@@ -217,7 +241,51 @@ async function deleteBnrRate(id){if(!confirm('Ștergi această rată din registr
 async function showInterestSegments(id){try{const d=await api('/api/interest/segments/'+id);segmentsModalTitle.textContent=`${d.accrual.contract_no} · ${d.accrual.associate_name} · ${d.accrual.period_start}–${d.accrual.period_end}`;segmentsBody.innerHTML=d.items.map(r=>`<tr><td>${esc(r.segment_start)} – ${esc(r.segment_end)}</td><td class="num">${r.days}</td><td class="num">${fmt.format(r.rate)}%</td><td class="num">${fmt.format(r.balance_days)}</td><td class="num"><b>${money(r.calculated_amount)}</b></td><td>${r.source_url?`<a href="${esc(r.source_url)}" target="_blank" rel="noopener">BNR</a>`:'—'}<div class="muted">valabilă din ${esc(r.rate_effective_date||'—')}</div></td></tr>`).join('');openModal('segmentsModal')}catch(e){toast(e.message,true)}}
 function fileSize(bytes){const n=Number(bytes||0);if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB'}
 
-async function loadTemplates(){const d=await api('/api/templates');state.templates=d.items;templatesBody.innerHTML=d.items.length?d.items.map(t=>{const path=t.path.split('/').map(encodeURIComponent).join('/');const copy=canEdit?`<button class="btn small" onclick="copyTemplate('${encodeURIComponent(t.path)}')">Copiază în companie</button>`:'';return `<tr><td><span class="pill ${t.category==='STANDARD'?'ok':'info'}">${esc(t.category)}</span></td><td><b>${esc(t.filename)}</b>${t.uploaded_by?`<div class="muted">încărcat de ${esc(t.uploaded_by)}</div>`:''}</td><td>${esc(t.description)}</td><td>${esc(t.extension)}</td><td class="num">${fileSize(t.size_bytes)}</td><td>${esc(t.modified_at||'—')}</td><td><div class="actions actions-start"><a class="btn small primary" href="/templates/${path}/download">↓ Descarcă</a>${copy}</div></td></tr>`}).join(''):'<tr><td colspan="7" class="empty">Nu există șabloane.</td></tr>'}
+async function loadTemplates(){const d=await api('/api/templates');state.templates=d.items;templatesBody.innerHTML=d.items.length?d.items.map(t=>{const path=t.path.split('/').map(encodeURIComponent).join('/');const copy=canEdit?`<button class="btn small" onclick="copyTemplate('${encodeURIComponent(t.path)}')">Copiază în companie</button>`:'';const generate=canEdit&&t.extension==='DOCX'?`<button class="btn small primary" data-template-path="${esc(t.path)}" onclick="openDocumentGenerator(this.dataset.templatePath)">Generează document</button>`:'';return `<tr><td><span class="pill ${t.category==='STANDARD'?'ok':'info'}">${esc(t.category)}</span></td><td><b>${esc(t.filename)}</b>${t.uploaded_by?`<div class="muted">încărcat de ${esc(t.uploaded_by)}</div>`:''}</td><td>${esc(t.description)}</td><td>${esc(t.extension)}</td><td class="num">${fileSize(t.size_bytes)}</td><td>${esc(t.modified_at||'—')}</td><td><div class="actions actions-start"><a class="btn small primary" href="/templates/${path}/download">↓ Descarcă</a>${copy}${generate}</div></td></tr>`}).join(''):'<tr><td colspan="7" class="empty">Nu există șabloane.</td></tr>'}
+async function openDocumentGenerator(templatePath='',fromInterest=false){
+  if(!canEdit)return;
+  try{
+    await Promise.all([loadTemplates(),loadLoans()]);
+    const templates=state.templates.filter(t=>t.extension==='DOCX');
+    if(!templates.length){toast('Nu există șabloane Word. Încărcați un DOCX din Șabloane.',true);return}
+    const form=document.getElementById('documentGeneratorForm');form.reset();form.classList.remove('is-hidden');
+    const result=document.getElementById('generatorResult');result.innerHTML='';result.classList.add('is-hidden');
+    document.getElementById('generatorTemplate').innerHTML=templates.map(t=>`<option value="${esc(t.path)}">${esc(t.category)} · ${esc(t.filename)}</option>`).join('');
+    if(fromInterest)templatePath=templates.find(t=>t.filename==='10_Fisa_calcul_dobanda_si_nota_contabila.docx')?.path||templates[0].path;
+    if(templatePath)document.getElementById('generatorTemplate').value=templatePath;
+    state.generatorInterestIds=[...state.selectedInterest];
+    const loans=new Set(state.interest.filter(r=>state.selectedInterest.has(r.id)).map(r=>r.loan_id));
+    document.getElementById('generatorLoan').innerHTML='<option value="">General / mai multe contracte</option>'+state.loans.map(l=>`<option value="${l.id}">${esc(l.contract_no)} · ${esc(l.associate_name)}</option>`).join('');
+    if(loans.size===1)document.getElementById('generatorLoan').value=String([...loans][0]);
+    const today=new Date();document.getElementById('generatorDate').value=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    document.getElementById('generatorInterestSummary').textContent=state.generatorInterestIds.length?`${state.generatorInterestIds.length} linii de dobândă selectate. Valorile vor fi preluate din registru la generare.`:'Fără linii de dobândă. Pentru o fișă de calcul, selectați mai întâi liniile în Dobânzi trimestriale.';
+    invalidateDocumentContext();openModal('documentGeneratorModal');
+  }catch(e){toast(e.message,true)}
+}
+function invalidateDocumentContext(){state.generatorRevision++;document.getElementById('generatorSubmit').disabled=true;document.getElementById('generatorFields').innerHTML='';document.getElementById('generatorError').textContent=''}
+function generatorPayload(){return {template_path:document.getElementById('generatorTemplate').value,loan_id:document.getElementById('generatorLoan').value||null,doc_no:document.getElementById('generatorNumber').value.trim(),doc_date:document.getElementById('generatorDate').value,interest_ids:state.generatorInterestIds}}
+async function loadDocumentContext(){
+  const revision=++state.generatorRevision;const error=document.getElementById('generatorError');error.textContent='';document.getElementById('generatorSubmit').disabled=true;
+  try{
+    const d=await api('/api/documents/template-context',{method:'POST',body:JSON.stringify(generatorPayload())});
+    if(revision!==state.generatorRevision)return;
+    document.getElementById('generatorFields').innerHTML=d.fields.map((f,i)=>`<div class="field span2"><label for="generatorField${i}">${esc(f.name)}</label><input id="generatorField${i}" data-template-field="${esc(f.name)}" value="${esc(f.value)}" maxlength="5000" required></div>`).join('');
+    document.getElementById('generatorInterestSummary').textContent=`${d.interest_count} linii de dobândă · calculată ${money(d.calculated_total)} · recunoscută ${money(d.recognized_total)}. Verificați câmpurile preluate înainte de generare.`;
+    document.getElementById('generatorSubmit').disabled=false;
+  }catch(e){if(revision===state.generatorRevision)error.textContent=e.message}
+}
+async function generateDocumentFromTemplate(e){
+  e.preventDefault();const button=document.getElementById('generatorSubmit');if(button.disabled)return;
+  button.disabled=true;button.textContent='Se generează…';document.getElementById('generatorError').textContent='';
+  try{
+    const fields=Object.fromEntries([...document.querySelectorAll('#generatorFields [data-template-field]')].map(input=>[input.dataset.templateField,input.value]));
+    const d=await api('/api/documents/generate',{method:'POST',body:JSON.stringify({...generatorPayload(),fields})});
+    document.getElementById('documentGeneratorForm').classList.add('is-hidden');
+    const result=document.getElementById('generatorResult');result.classList.remove('is-hidden');
+    result.innerHTML=`<p><b>Document generat și salvat în registru.</b></p><p>${esc(d.filename)}</p><div class="formactions"><a class="btn" href="${esc(d.download_url)}">Descarcă Word</a><a class="btn primary" target="_blank" rel="noopener" href="${esc(d.print_url)}">Previzualizează / PDF</a><button class="btn" onclick="closeModal('documentGeneratorModal');showPage('documents')">Deschide registrul</button></div>`;
+    await loadDocuments();toast('Document generat din datele selectate');
+  }catch(x){document.getElementById('generatorError').textContent=x.message}finally{button.disabled=false;button.textContent='Generează și salvează în registru'}
+}
 function openTemplateUpload(){templateUploadForm.reset();openModal('templateUploadModal')}
 async function uploadTemplate(e){e.preventDefault();const file=templateUploadFile.files[0];if(!file){toast('Selectați fișierul șablon',true);return}if(file.size>25*1024*1024){toast('Fișierul depășește limita de 25 MB',true);return}const fd=new FormData();fd.append('file',file);fd.append('description',templateUploadDescription.value);templateUploadButton.disabled=true;templateUploadButton.textContent='Se încarcă…';try{const d=await uploadApi('/api/templates/upload',fd);closeModal('templateUploadModal');await loadTemplates();toast(`Șablon încărcat: ${d.filename}`)}catch(x){toast(x.message,true)}finally{templateUploadButton.disabled=false;templateUploadButton.textContent='Încarcă șablon'}}
 async function copyTemplate(encodedPath){const path=decodeURIComponent(encodedPath).split('/').map(encodeURIComponent).join('/');try{const d=await api(`/api/templates/${path}/copy-to-company`,{method:'POST',body:'{}'});toast(d.copied?`Șablon copiat în dosarul companiei: ${d.filename}`:`Șablonul există deja în dosarul companiei: ${d.filename}`)}catch(x){toast(x.message,true)}}
