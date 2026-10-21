@@ -139,6 +139,29 @@ class GenerationChecks(unittest.TestCase):
         self.assertEqual(history["word_items"][0]["sha256"], hashlib.sha256(content).hexdigest())
         self.assertEqual(len(self.client.get("/api/documents").json["items"]), 1)
 
+    def test_interest_company_not_repeated_in_new_or_legacy_print(self):
+        response = self.post("/api/documents/generate", self.request_data())
+        self.assertEqual(response.status_code, 200, response.json)
+        with self.client.get(response.json["download_url"]) as download:
+            original = download.data
+        with zipfile.ZipFile(io.BytesIO(original)) as archive:
+            doc = minidom.parseString(archive.read("word/document.xml"))
+            self.assertNotIn("Compania QA", self.docx.text(doc))
+            headers = "".join(self.docx.text(minidom.parseString(archive.read(n))) for n in archive.namelist() if n.startswith("word/header") and n.endswith(".xml"))
+            self.assertIn("Compania QA", headers)
+            body = doc.getElementsByTagNameNS(self.docx.W, "body")[0]
+            first = next(n for n in body.childNodes if n.nodeType == n.ELEMENT_NODE)
+            body.insertBefore(self.docx.paragraph(doc, "Compania QA · CUI 123456"), first.nextSibling)
+            legacy = self.root / "legacy_interest.docx"
+            with zipfile.ZipFile(legacy, "w") as result:
+                for info in archive.infolist():
+                    result.writestr(info, doc.toxml(encoding="utf-8") if info.filename == "word/document.xml" else archive.read(info.filename))
+        from loancopilot.docx_print import DocxPrintRenderer
+        with DocxPrintRenderer(legacy) as renderer:
+            self.assertNotIn("Compania QA", "".join("".join(page) for page in renderer._body_pages()))
+        with zipfile.ZipFile(legacy) as archive:
+            self.assertIn("Compania QA", self.docx.text(minidom.parseString(archive.read("word/document.xml"))))
+
     def test_validation_no_selection_missing_row_mismatched_contract_and_traversal(self):
         for data in (self.request_data([]), self.request_data([999]), {**self.request_data(), "loan_id": 1},
                      {**self.request_data(), "template_path": "../../outside.docx"}):

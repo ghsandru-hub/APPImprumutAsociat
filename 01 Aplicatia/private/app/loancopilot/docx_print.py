@@ -670,7 +670,23 @@ class DocxPrintRenderer:
         body = self.document.find("w:body", NS)
         if body is None:
             return [[]]
-        return self._render_blocks(list(body), self.document_rels, "word", allow_page_breaks=True)
+        children = list(body)
+        paragraphs = [node for node in children if node.tag == w("p")]
+        # Older generated interest sheets repeated their header identity below the title.
+        # Filter only that exact standalone line, leaving the archived Word untouched.
+        plain = lambda node: "".join(node.itertext()) if node is not None else ""
+        if paragraphs and "FIȘĂ DE CALCUL A DOBÂNZII ȘI NOTĂ CONTABILĂ" in plain(paragraphs[0]):
+            target = self.setup.first_header_target if self.setup.title_page else self.setup.default_header_target
+            if target:
+                member = posixpath.normpath(target if target.startswith("word/") else f"word/{target}")
+                if member in self.archive.namelist():
+                    normalize = lambda value: " ".join(value.split()).casefold()
+                    header = normalize(plain(self._xml(member)))
+                    for paragraph in paragraphs[1:3]:
+                        match = re.fullmatch(r"(.+?)\s*·\s*CUI\s+(\d+)", plain(paragraph).strip())
+                        if match and normalize(match[1]) in header and re.search(r"cui\s*" + re.escape(match[2]) + r"(?!\d)", header):
+                            children.remove(paragraph)
+        return self._render_blocks(children, self.document_rels, "word", allow_page_breaks=True)
 
     def render(self, *, title: str | None = None, download_url: str = "", auto_print: bool = False) -> str:
         explicit_pages = self._body_pages()

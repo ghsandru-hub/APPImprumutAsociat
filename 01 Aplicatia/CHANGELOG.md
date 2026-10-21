@@ -1,3 +1,7 @@
+## 2.6.9
+
+- Previzualizarea fișelor de dobândă existente omite linia de companie duplicată atunci când denumirea și CUI sunt deja în antet. Fișierele Word arhivate rămân păstrate.
+
 ## 2.6.8
 
 - Corecție optică verticală pentru centrarea formei vizibile a iconurilor în conturul butoanelor.
