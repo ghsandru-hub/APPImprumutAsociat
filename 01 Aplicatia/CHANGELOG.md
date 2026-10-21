@@ -1,3 +1,8 @@
+## 2.6.20
+
+- Datele fiscale din antetul aplicației sunt aliniate cu textul denumirii din selector.
+- Blocurile Întocmit, Verificat, Aprobat și semnături au un rând liber deasupra la tipărire.
+
 ## 2.6.19
 
 - Eliminat cardul informativ Separare multi-companie din bara laterală.

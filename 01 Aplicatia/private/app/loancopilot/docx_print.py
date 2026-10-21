@@ -626,8 +626,16 @@ class DocxPrintRenderer:
         for child in children:
             if child.tag == w("sectPr"):
                 continue
+            signature = allow_page_breaks and re.match(
+                r"^(întocmit|intocmit|verificat|aprobat|semnături|semnaturi|semnătură|semnatura|asociat|administrator)(?:\s*[:,]|\s*$|\s*_{2,})",
+                "".join(child.itertext()).strip(), re.I)
             if child.tag == w("p"):
                 segments = self._paragraph_segments(child, rels, base_dir)
+                if signature:
+                    for index, segment in enumerate(segments):
+                        if segment is not None:
+                            segments[index] = segment.replace('class="word-paragraph', 'class="signature-block word-paragraph', 1)
+                            break
                 for segment in segments:
                     if segment is None and allow_page_breaks:
                         if pages[-1]:
@@ -635,7 +643,10 @@ class DocxPrintRenderer:
                     elif segment is not None:
                         pages[-1].append(segment)
             elif child.tag == w("tbl"):
-                pages[-1].append(self._render_table(child, rels, base_dir))
+                rendered = self._render_table(child, rels, base_dir)
+                if signature:
+                    rendered = rendered.replace('class="word-table"', 'class="word-table signature-block"', 1)
+                pages[-1].append(rendered)
             elif child.tag == w("sdt"):
                 content = child.find("w:sdtContent", NS)
                 if content is not None:
@@ -778,6 +789,7 @@ html,body{{margin:0;padding:0;background:#e9ecef;color:#202326;font-family:Aptos
 .word-tab-row{{display:flex;width:100%;justify-content:space-between;align-items:baseline;gap:10mm}}
 .word-tab-row>span{{min-width:0}}
 .word-list-prefix{{display:inline-block;min-width:1.8em}}
+.signature-block{{margin-top:1lh!important}}
 .word-table{{margin:4pt 0 7pt 0;font-size:inherit;break-inside:avoid}}
 .word-table td{{border:var(--word-table-border,.25pt solid #c7ccd1);padding:3pt 5pt;vertical-align:top}}
 .word-table .word-paragraph{{margin-bottom:0}}

@@ -141,6 +141,7 @@ header {
 }
 
 .head-center span {
+  padding-left: 9px;
   color: var(--muted);
   font-size: 12px;
 }
