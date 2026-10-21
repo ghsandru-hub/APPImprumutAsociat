@@ -1,3 +1,7 @@
+## 2.6.11
+
+- Rambursarea folosește iconul minus, distinct de săgeata pentru deschiderea documentului.
+
 ## 2.6.10
 
 - Acțiunile fiecărui document sunt grupate într-un meniu hamburger, cu acces la toate operațiunile existente.
